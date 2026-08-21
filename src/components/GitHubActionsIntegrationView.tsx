@@ -39,12 +39,11 @@ export const GitHubActionsIntegrationView: React.FC<GitHubActionsIntegrationView
 on:
   schedule:
     # Se ejecuta cada 15 minutos en horario hábil de Lunes a Viernes
-    # (Ejemplo: de 13:00 UTC a 02:00 UTC = 07:00 AM a 20:00 PM CDMX)
     - cron: '*/15 13-23 * * 1-5'
   workflow_dispatch: # Permite disparar manualmente con un clic en cualquier momento
     inputs:
       target_user_id:
-        description: 'ID o matrícula específica (opcional)'
+        description: 'Matrícula o ID específico de docente (opcional, deja "all" para todos)'
         required: false
         default: 'all'
 
@@ -57,18 +56,17 @@ jobs:
       - name: Checkout del Repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js 18
+      - name: Configurar Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          cache: 'npm'
+          node-version: 24
 
-      - name: Instalar Dependencias y Navegador Playwright
+      - name: Instalar Dependencias y Playwright Chromium
         run: |
-          npm install
+          npm install firebase dotenv playwright
           npx playwright install chromium --with-deps
 
-      - name: Ejecutar Worker Desatendido (Conectado a Firebase)
+      - name: Ejecutar Checado Desatendido (Conectado a Firebase)
         env:
           FIREBASE_PROJECT_ID: \${{ secrets.FIREBASE_PROJECT_ID }}
           FIREBASE_API_KEY: \${{ secrets.FIREBASE_API_KEY }}
@@ -82,38 +80,71 @@ jobs:
         with:
           name: evidencias-checado-uad-\${{ github.run_id }}
           path: '*.png'
+          if-no-files-found: ignore
           retention-days: 14
 `;
 
   const workerFirebaseJs = `/**
- * WORKER DESATENDIDO CONECTADO A FIREBASE FIRESTORE
- * 
- * 1. Se conecta a Firestore (colección 'uad_users').
- * 2. Consulta la hora actual (CDMX) y determina qué docentes deben checar en este bloque.
- * 3. Ejecuta Playwright Headless para cada docente.
- * 4. Guarda la bitácora y estado de éxito/error directamente en Firestore ('uad_executions').
+ * WORKER AUTÓNOMO DE PLAYWRIGHT PARA CHECADO UAD
+ * Alimentado dinámicamente desde Firebase Firestore
+ * Diseñado para ejecutarse en GitHub Actions o como microservicio desatendido
  */
 
 const { chromium } = require('playwright');
-const { initializeApp } = require('firebase/app');
-const { getFirestore, collection, getDocs, doc, setDoc, updateDoc } = require('firebase/firestore');
+const { initializeApp, getApps } = require('firebase/app');
+const { 
+  getFirestore, 
+  collection, 
+  getDocs, 
+  doc, 
+  setDoc, 
+  updateDoc 
+} = require('firebase/firestore');
+require('dotenv').config();
 
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  appId: process.env.FIREBASE_APP_ID
-};
+let dbInstance = null;
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+function getFirebaseDB() {
+  if (dbInstance) return dbInstance;
+
+  const apiKey = process.env.FIREBASE_API_KEY;
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const appId = process.env.FIREBASE_APP_ID;
+
+  const missing = [];
+  if (!apiKey) missing.push('FIREBASE_API_KEY');
+  if (!projectId) missing.push('FIREBASE_PROJECT_ID');
+  if (!appId) missing.push('FIREBASE_APP_ID');
+
+  if (missing.length > 0) {
+    console.error("=================================================");
+    console.error("❌ ERROR: FALTAN SECRETS EN GITHUB ACTIONS");
+    console.error("=================================================");
+    console.error("Faltan las siguientes variables de entorno secretas:");
+    missing.forEach(m => console.error(\`  - \${m}\`));
+    console.error("\\n👉 CÓMO SOLUCIONARLO:");
+    console.error("1. Ve a tu repositorio en GitHub > Settings > Secrets and variables > Actions");
+    console.error("2. Haz clic en 'New repository secret' y agrega cada una con sus valores de Firebase.");
+    console.error("=================================================\\n");
+    throw new Error(\`Faltan secrets requeridos en GitHub: \${missing.join(', ')}\`);
+  }
+
+  const existing = getApps();
+  const app = existing.length > 0 ? existing[0] : initializeApp({
+    apiKey,
+    projectId,
+    appId,
+    authDomain: \`\${projectId}.firebaseapp.com\`
+  });
+
+  dbInstance = getFirestore(app);
+  return dbInstance;
+}
 
 const TARGET_PORTAL = "https://portal.uad.mx/";
-
-// Días de la semana para mapear
 const DAYS_MAP = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
 function getCDMXTime() {
-  // Ajuste a Zona Horaria America/Mexico_City
   const now = new Date();
   const cdmxString = now.toLocaleString("en-US", { timeZone: "America/Mexico_City" });
   const cdmxDate = new Date(cdmxString);
@@ -123,27 +154,33 @@ function getCDMXTime() {
   const mm = String(cdmxDate.getMinutes()).padStart(2, '0');
   const currentTime = \`\${hh}:\${mm}\`;
   
-  return { dayKey, currentTime, cdmxDate, fullString: cdmxDate.toISOString() };
+  return { dayKey, currentTime, cdmxDate, fullISO: cdmxDate.toISOString() };
 }
 
-async function fetchActiveUsersFromFirebase() {
-  console.log("[FIREBASE] Consultando colección 'uad_users'...");
-  const snap = await getDocs(collection(db, 'uad_users'));
-  const users = [];
-  snap.forEach(docSnap => {
-    const data = docSnap.data();
-    if (data.active !== false) {
-      users.push({ id: docSnap.id, ...data });
-    }
-  });
-  console.log(\`[FIREBASE] \${users.length} usuarios activos obtenidos.\`);
-  return users;
+async function fetchActiveUsersFromFirebase(db) {
+  console.log("[FIREBASE] Obteniendo lista de docentes desde colección 'uad_users'...");
+  try {
+    const snap = await getDocs(collection(db, 'uad_users'));
+    const users = [];
+    snap.forEach(d => {
+      const data = d.data();
+      if (data.active !== false) {
+        users.push({ id: d.id, ...data });
+      }
+    });
+    console.log(\`[FIREBASE] ✅ Total de docentes activos obtenidos: \${users.length}\`);
+    return users;
+  } catch (error) {
+    console.error("[FIREBASE ERROR] No se pudo leer la colección 'uad_users':", error.message);
+    console.error("👉 Asegúrate de que las Reglas de Firestore en Firebase Console permitan lectura/escritura.");
+    throw error;
+  }
 }
 
-async function performAttendanceCheck(user, timeContext) {
-  console.log(\`\\n--------------------------------------------------\`);
-  console.log(\`[INICIO] Procesando docente: \${user.name} (\${user.username})\`);
-  console.log(\`[HORARIO] Checado programado a las: \${timeContext.currentTime} [\${timeContext.dayKey}]\`);
+async function executeAttendanceCheck(db, user, timeContext) {
+  console.log(\`\\n==================================================\`);
+  console.log(\`[EJECUTANDO] Docente: \${user.name || user.username} (\${user.username})\`);
+  console.log(\`[HORARIO] Hora CDMX: \${timeContext.currentTime} [Día: \${timeContext.dayKey.toUpperCase()}]\`);
 
   const browser = await chromium.launch({
     headless: true,
@@ -161,37 +198,41 @@ async function performAttendanceCheck(user, timeContext) {
   const startTime = Date.now();
 
   try {
-    // 1. Acceso al portal
-    console.log(\`[1/5] Navegando a \${TARGET_PORTAL}...\`);
+    // 1. Acceso a URL
+    console.log(\`[1/5] Accediendo a \${TARGET_PORTAL}...\`);
     await page.goto(TARGET_PORTAL, { waitUntil: 'networkidle', timeout: 35000 });
 
-    // Cerrar modal comunicado si aparece
-    const modal = await page.$("#modal-comunicado.in, #modal-comunicado.show, #modal-comunicado:not([style*='display: none'])");
-    if (modal) {
-      console.log("[AVISO] Modal institucional detectado. Descartando...");
-      await page.click("#modal-comunicado .close, #modal-comunicado button").catch(() => {});
+    // Descartar comunicado institucional si existe
+    try {
+      const modal = await page.$("#modal-comunicado.in, #modal-comunicado.show, #modal-comunicado:not([style*='display: none'])");
+      if (modal) {
+        console.log("[AVISO] Modal institucional detectado. Descartando...");
+        await page.click("#modal-comunicado .close, #modal-comunicado button").catch(() => {});
+      }
+    } catch (e) {
+      // ignore
     }
 
-    // 2. Inyectar matrícula y contraseña
+    // 2. Inyectar credenciales con selectores exactos
     console.log(\`[2/5] Ingresando matrícula en #user y contraseña en #pass...\`);
     await page.waitForSelector("#user, input[name='_usuario_']", { timeout: 12000 });
     await page.fill("#user, input[name='_usuario_']", user.username);
     await page.fill("#pass, input[name='_pass_']", user.password || user.passwordEncrypted || "");
 
-    // 3. Click al botón de inicio de sesión con huella (#boton)
-    console.log(\`[3/5] Enviando formulario con #boton...\`);
+    // 3. Enviar login con #boton (icono fa-paw)
+    console.log(\`[3/5] Enviando login mediante #boton...\`);
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'networkidle', timeout: 25000 }).catch(() => {}),
       page.click("#boton, button[name='boton'], button:has(.fa-paw), #formulario_inicio button[type='submit']")
     ]);
 
-    // 4. Navegar al menú Horario
-    console.log(\`[4/5] Navegando a sección Horario...\`);
+    // 4. Navegar a menú lateral Horario
+    console.log(\`[4/5] Navegando a la sección 'Horario'...\`);
     await page.click("a:has-text('Horario'), .sidebar-menu a[href*='horario'], nav :text('Horario')");
     await page.waitForSelector("table, .table-responsive, :has-text('Horario')", { timeout: 15000 });
 
     // 5. Localizar y pulsar botón verde 'Checar' (#boton_checar)
-    console.log(\`[5/5] Comprobando disponibilidad de #boton_checar...\`);
+    console.log(\`[5/5] Localizando botón verde 'Checar' (#boton_checar)...\`);
     const checarSelector = "#boton_checar, button#boton_checar, button[onclick*='checar'], button:has-text('Checar'), .btn-success.btn-lg";
     await page.waitForSelector(checarSelector, { timeout: 10000 });
     const checkBtn = await page.$(checarSelector);
@@ -201,12 +242,12 @@ async function performAttendanceCheck(user, timeContext) {
       if (isEnabled) {
         await checkBtn.click();
         status = 'success';
-        message = \`Botón verde 'Checar' accionado exitosamente para \${user.name}.\`;
+        message = \`Botón verde 'Checar' presionado exitosamente para \${user.name || user.username}.\`;
         console.log(\`[✓ ÉXITO] \${message}\`);
         await page.waitForTimeout(2000);
       } else {
         status = 'success';
-        message = \`El botón 'Checar' no estaba activo en este minuto para \${user.name}.\`;
+        message = \`El botón 'Checar' no estaba activo en este minuto para \${user.name || user.username}.\`;
         console.log(\`[INFO] \${message}\`);
       }
     } else {
@@ -215,15 +256,19 @@ async function performAttendanceCheck(user, timeContext) {
       console.log(\`[AVISO] \${message}\`);
     }
 
-    // Captura de evidencia
+    // Captura de pantalla para auditoría
     const screenshotName = \`audit_\${user.username}_\${Date.now()}.png\`;
     await page.screenshot({ path: screenshotName, fullPage: true });
     console.log(\`[EVIDENCIA] Captura guardada: \${screenshotName}\`);
 
   } catch (error) {
     status = 'failed';
-    message = \`Error durante el proceso: \${error.message}\`;
+    message = \`Error en automatización: \${error.message}\`;
     console.error(\`[ERROR] \${message}\`);
+    try {
+      const errShot = \`error_\${user.username}_\${Date.now()}.png\`;
+      await page.screenshot({ path: errShot, fullPage: true });
+    } catch (_) {}
   } finally {
     await browser.close();
   }
@@ -235,7 +280,7 @@ async function performAttendanceCheck(user, timeContext) {
     await setDoc(doc(db, 'uad_executions', execId), {
       id: execId,
       userId: user.id,
-      userName: user.name,
+      userName: user.name || user.username,
       username: user.username,
       status,
       message,
@@ -245,32 +290,39 @@ async function performAttendanceCheck(user, timeContext) {
       day: timeContext.dayKey
     });
 
-    // Actualizar estado del usuario en Firebase
     await updateDoc(doc(db, 'uad_users', user.id), {
       lastRunAt: new Date().toISOString(),
       lastStatus: status
     });
-    console.log("[FIREBASE] Bitácora y estado sincronizados en Firestore.");
+    console.log("[FIREBASE] Bitácora guardada en Firestore exitosamente.");
   } catch (fbErr) {
-    console.error("[FIREBASE ERROR] No se pudo guardar el log en Firestore:", fbErr.message);
+    console.error("[FIREBASE ERROR] No se pudo guardar bitácora en Firestore:", fbErr.message);
   }
 }
 
 async function main() {
   console.log("=================================================");
-  console.log("  UAD AUTOMATION WORKER (GITHUB ACTIONS + FIREBASE)");
+  console.log("  ORQUESTADOR UAD (GITHUB ACTIONS + FIREBASE)");
   console.log("=================================================");
-  
-  if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-    console.error("[FATAL] Faltan las variables de entorno de Firebase (FIREBASE_API_KEY, FIREBASE_PROJECT_ID).");
-    process.exit(1);
+
+  const db = getFirebaseDB();
+  const timeContext = getCDMXTime();
+  console.log(\`[ZONA HORARIA CDMX] Hora: \${timeContext.currentTime} | Día: \${timeContext.dayKey.toUpperCase()}\`);
+
+  const allUsers = await fetchActiveUsersFromFirebase(db);
+  const targetFilter = process.env.TARGET_USER_INPUT || 'all';
+
+  if (allUsers.length === 0) {
+    console.log("=================================================");
+    console.log("⚠️ AVISO: No hay docentes en la colección 'uad_users'.");
+    console.log("Para sincronizar docentes:");
+    console.log("1. Abre la aplicación web > pestaña 'Vinculación Firebase'");
+    console.log("2. Haz clic en 'Subir Docentes Locales a Firestore'");
+    console.log("=================================================");
+    return;
   }
 
-  const timeContext = getCDMXTime();
-  console.log(\`[TIME] Hora actual CDMX: \${timeContext.currentTime} (Día: \${timeContext.dayKey.toUpperCase()})\`);
-
-  const allUsers = await fetchActiveUsersFromFirebase();
-  const targetFilter = process.env.TARGET_USER_INPUT || 'all';
+  let executedCount = 0;
 
   for (const user of allUsers) {
     if (targetFilter !== 'all' && user.id !== targetFilter && user.username !== targetFilter) {
@@ -280,8 +332,8 @@ async function main() {
     const schedule = user.weeklySchedule || {};
     const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
 
-    // Comprobar si corresponde ejecutar (con ventana de tolerancia de ±15 min)
-    const shouldRunNow = targetFilter !== 'all' || dayTimes.some(t => {
+    const isManualRun = targetFilter !== 'all';
+    const shouldRunNow = isManualRun || dayTimes.some(t => {
       const [th, tm] = t.split(':').map(Number);
       const [ch, cm] = timeContext.currentTime.split(':').map(Number);
       const targetMin = th * 60 + tm;
@@ -290,19 +342,25 @@ async function main() {
     });
 
     if (shouldRunNow) {
-      await performAttendanceCheck(user, timeContext);
+      executedCount++;
+      await executeAttendanceCheck(db, user, timeContext);
       await new Promise(r => setTimeout(r, 2000));
     } else {
-      console.log(\`[SKIP] \${user.name} (\${user.username}) no tiene horario asignado a las \${timeContext.currentTime} (\${dayTimes.join(', ')}).\`);
+      console.log(\`[OMITIDO] \${user.name || user.username} (\${user.username}) sin horario a las \${timeContext.currentTime} (Horarios: \${dayTimes.join(', ') || 'Ninguno'}).\`);
     }
   }
 
   console.log("\\n=================================================");
-  console.log("  PROCESO DE EJECUCIÓN FINALIZADO");
+  console.log(\`  PROCESO COMPLETADO: \${executedCount} docente(s) procesado(s)\`);
   console.log("=================================================");
 }
 
-main();
+if (require.main === module) {
+  main().catch(err => {
+    console.error("\\n❌ Error fatal en la ejecución:", err.message);
+    process.exit(1);
+  });
+}
 `;
 
   const packageJsonContent = `{

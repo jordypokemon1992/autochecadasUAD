@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # Permite disparar manualmente con un clic en cualquier momento
     inputs:
       target_user_id:
-        description: 'Matrícula o ID específico de docente (opcional)'
+        description: 'Matrícula o ID específico de docente (opcional, deja "all" para todos)'
         required: false
         default: 'all'
 
@@ -20,10 +20,10 @@ jobs:
       - name: Checkout del Repositorio
         uses: actions/checkout@v4
 
-      - name: Configurar Node.js 18
+      - name: Configurar Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 24
 
       - name: Instalar Dependencias y Playwright Chromium
         run: |
@@ -44,4 +44,6 @@ jobs:
         with:
           name: evidencias-checado-uad-${{ github.run_id }}
           path: '*.png'
+          if-no-files-found: ignore
           retention-days: 14
+
