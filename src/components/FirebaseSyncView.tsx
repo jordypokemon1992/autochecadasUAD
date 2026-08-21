@@ -128,23 +128,25 @@ export const FirebaseSyncView: React.FC<FirebaseSyncViewProps> = ({
     }
 
     setStatus('syncing');
-    setStatusMessage('Descargando datos desde Firestore...');
+    setStatusMessage('Descargando datos desde Firestore y optimizando bóveda...');
     try {
       const { db } = initFirebase(saved);
       const remoteUsers = await fetchUsersFromFirestore(db);
       
-      // Save each to local server
-      for (const u of remoteUsers) {
-        await fetch('/api/users', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(u)
-        });
+      // Batch sync to server in a single atomic call with deduplication
+      const res = await fetch('/api/users/sync-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ users: remoteUsers, mode: 'merge' })
+      });
+
+      if (!res.ok) {
+        throw new Error('Error al sincronizar con el servidor local.');
       }
 
       await onRefreshData();
       setStatus('connected');
-      setStatusMessage(`Se sincronizaron ${remoteUsers.length} docentes desde Firestore.`);
+      setStatusMessage(`Se sincronizaron ${remoteUsers.length} docentes desde Firestore sin duplicados.`);
     } catch (err: any) {
       console.error('Pull failed', err);
       setStatus('error');
@@ -228,17 +230,17 @@ service cloud.firestore {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Form (2 cols) */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-            <h3 className="font-bold text-slate-800 text-sm mb-4 flex items-center gap-2">
-              <Key className="w-4 h-4 text-orange-500" />
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+            <h3 className="font-bold text-slate-200 text-sm mb-4 flex items-center gap-2">
+              <Key className="w-4 h-4 text-orange-400" />
               <span>Credenciales de Firebase Web SDK</span>
             </h3>
 
             <form onSubmit={handleSaveAndConnect} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Project ID <span className="text-red-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Project ID <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
@@ -246,14 +248,14 @@ service cloud.firestore {
                     placeholder="ej. uad-asistencia-prod"
                     value={projectId}
                     onChange={(e) => setProjectId(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 text-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
                   />
                   <span className="text-[10px] text-slate-500">ID del proyecto en Firebase Console</span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    API Key (Web API Key) <span className="text-red-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    API Key (Web API Key) <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
@@ -261,7 +263,7 @@ service cloud.firestore {
                     placeholder="ej. AIzaSyB..."
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 text-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
                   />
                   <span className="text-[10px] text-slate-500">Configuración del proyecto &gt; Clave de API web</span>
                 </div>
@@ -269,8 +271,8 @@ service cloud.firestore {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    App ID <span className="text-red-500">*</span>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    App ID <span className="text-rose-400">*</span>
                   </label>
                   <input
                     type="text"
@@ -278,13 +280,13 @@ service cloud.firestore {
                     placeholder="ej. 1:161704440434:web:9f8a2..."
                     value={appId}
                     onChange={(e) => setAppId(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 text-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
                   />
                   <span className="text-[10px] text-slate-500">Identificador de tu App Web en Firebase</span>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
                     Auth Domain (Opcional)
                   </label>
                   <input
@@ -292,7 +294,7 @@ service cloud.firestore {
                     placeholder="ej. mi-proyecto.firebaseapp.com"
                     value={authDomain}
                     onChange={(e) => setAuthDomain(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-700 text-slate-200 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-500/20 focus:border-orange-500 focus:outline-none"
                   />
                   <span className="text-[10px] text-slate-500">Por defecto: tu-project-id.firebaseapp.com</span>
                 </div>
@@ -302,17 +304,17 @@ service cloud.firestore {
               {statusMessage && (
                 <div className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
                   status === 'connected'
-                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
                     : status === 'error'
-                    ? 'bg-red-50 text-red-800 border border-red-200'
-                    : 'bg-blue-50 text-blue-800 border border-blue-200'
+                    ? 'bg-rose-950/80 text-rose-300 border border-rose-800'
+                    : 'bg-cyan-950/80 text-cyan-300 border border-cyan-800'
                 }`}>
                   {status === 'connected' ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                   ) : status === 'error' ? (
-                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                   ) : (
-                    <RefreshCw className="w-4 h-4 text-blue-600 shrink-0 mt-0.5 animate-spin" />
+                    <RefreshCw className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5 animate-spin" />
                   )}
                   <span>{statusMessage}</span>
                 </div>
@@ -322,7 +324,7 @@ service cloud.firestore {
                 <button
                   type="submit"
                   disabled={status === 'syncing'}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-700 text-white shadow-sm transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white shadow-sm transition-colors cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>Guardar y Probar Conexión</span>
@@ -332,7 +334,7 @@ service cloud.firestore {
                   <button
                     type="button"
                     onClick={handleDisconnect}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer"
                   >
                     <span>Desconectar</span>
                   </button>
@@ -351,7 +353,7 @@ service cloud.firestore {
               <button
                 type="button"
                 onClick={copyRules}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] font-mono text-slate-300 border border-slate-700 cursor-pointer"
               >
                 {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                 <span>{copied ? 'Copiado' : 'Copiar Reglas'}</span>
@@ -368,14 +370,14 @@ service cloud.firestore {
 
         {/* Right Column: Sync Actions & Stats (1 col) */}
         <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4">
-            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-              <ArrowRightLeft className="w-4 h-4 text-cyan-600" />
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm space-y-4">
+            <h3 className="font-bold text-slate-200 text-sm flex items-center gap-2">
+              <ArrowRightLeft className="w-4 h-4 text-cyan-400" />
               <span>Acciones de Sincronización</span>
             </h3>
 
-            <p className="text-xs text-slate-600">
-              Transfiere tus docentes configurados y horarios entre el almacenamiento local persistente y tu nube Firestore:
+            <p className="text-xs text-slate-400">
+              Transfiere tus docentes configurados y horarios entre el almacenamiento local persistente y tu nube Firestore con deduplicación automática:
             </p>
 
             <div className="space-y-3">
@@ -386,7 +388,7 @@ service cloud.firestore {
                 className={`w-full py-2.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
                   status === 'connected'
                     ? 'bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow-sm cursor-pointer'
-                    : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 }`}
               >
                 <Cloud className="w-4 h-4" />
@@ -399,8 +401,8 @@ service cloud.firestore {
                 disabled={status !== 'connected'}
                 className={`w-full py-2.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
                   status === 'connected'
-                    ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-sm cursor-pointer'
-                    : 'bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200'
+                    ? 'bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 shadow-sm cursor-pointer'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 }`}
               >
                 <RefreshCw className="w-4 h-4" />
@@ -409,25 +411,25 @@ service cloud.firestore {
             </div>
 
             {remoteCount && (
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 space-y-1">
-                <div className="font-semibold text-slate-800">Estado en la Nube:</div>
-                <div>• Colección <code className="text-orange-700">uad_users</code>: <strong>{remoteCount.users}</strong> registros</div>
-                <div>• Colección <code className="text-orange-700">uad_jobs</code>: <strong>{jobs.length}</strong> tareas</div>
+              <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300 space-y-1">
+                <div className="font-semibold text-slate-200">Estado en la Nube:</div>
+                <div>• Colección <code className="text-orange-400 font-mono">uad_users</code>: <strong>{remoteCount.users}</strong> registros</div>
+                <div>• Colección <code className="text-orange-400 font-mono">uad_jobs</code>: <strong>{jobs.length}</strong> tareas</div>
               </div>
             )}
           </div>
 
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-900 space-y-2">
-            <div className="font-bold flex items-center gap-1.5 text-amber-800">
-              <Zap className="w-4 h-4 text-amber-600" />
+          <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-4 text-xs text-amber-200/90 space-y-2">
+            <div className="font-bold flex items-center gap-1.5 text-amber-400">
+              <Zap className="w-4 h-4 text-amber-400" />
               <span>Persistencia Híbrida 100% Segura</span>
             </div>
-            <p className="text-[11px] leading-relaxed text-amber-800/90">
+            <p className="text-[11px] leading-relaxed text-slate-300">
               Tu sistema cuenta con **doble respaldo**:
             </p>
-            <ul className="list-disc pl-4 space-y-1 text-[11px] text-amber-800/90">
-              <li><strong>Disco Local del Servidor</strong>: Los datos se guardan inmediatamente en archivos JSON no volátiles (`data/vault_users.json`).</li>
-              <li><strong>Firebase Firestore</strong>: Cuando está conectado, los cambios se replican en la nube para acceso desde múltiples dispositivos o Workers externos.</li>
+            <ul className="list-disc pl-4 space-y-1 text-[11px] text-slate-400">
+              <li><strong className="text-slate-200">Disco Local del Servidor</strong>: Los datos se guardan en archivos JSON no volátiles (`data/vault_users.json`).</li>
+              <li><strong className="text-slate-200">Firebase Firestore</strong>: Sincronización a demanda para workers GitHub Actions y accesos multi-dispositivo sin lecturas excesivas.</li>
             </ul>
           </div>
         </div>

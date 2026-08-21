@@ -287,6 +287,48 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
     }));
   };
 
+  const [isDeduplicating, setIsDeduplicating] = useState(false);
+  const [dedupMessage, setDedupMessage] = useState<string | null>(null);
+
+  // Safeguard: Deduplicate users by username (matrícula) and ID in memory to ensure pristine UI
+  const uniqueUsers = React.useMemo(() => {
+    const map = new Map<string, UserCredential>();
+    for (const u of users) {
+      const key = (u.username || u.id).trim();
+      if (!map.has(key)) {
+        map.set(key, u);
+      } else {
+        const prev = map.get(key)!;
+        map.set(key, {
+          ...prev,
+          ...u,
+          id: prev.id || u.id,
+          weeklySchedule: u.weeklySchedule || prev.weeklySchedule,
+          scheduledTimes: u.scheduledTimes || prev.scheduledTimes,
+          activeDays: u.activeDays || prev.activeDays,
+        });
+      }
+    }
+    return Array.from(map.values());
+  }, [users]);
+
+  const handleDeduplicateVault = async () => {
+    setIsDeduplicating(true);
+    setDedupMessage(null);
+    try {
+      const res = await fetch('/api/users/deduplicate', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setDedupMessage(data.message || 'Bóveda optimizada.');
+        setTimeout(() => setDedupMessage(null), 5000);
+      }
+    } catch (e) {
+      console.error('Error deduplicating:', e);
+    } finally {
+      setIsDeduplicating(false);
+    }
+  };
+
   const toggleCardExpansion = (userId: string) => {
     setExpandedCards(prev => ({
       ...prev,
@@ -302,7 +344,7 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
   };
 
   // Filter users by selected day if filter active
-  const filteredUsers = users.filter(user => {
+  const filteredUsers = uniqueUsers.filter(user => {
     if (dayFilter === 'all') return true;
     if (user.weeklySchedule && user.weeklySchedule[dayFilter]) {
       return (user.weeklySchedule[dayFilter]?.length || 0) > 0;
@@ -310,7 +352,7 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
     return user.activeDays?.includes(dayFilter);
   });
 
-  const totalWeeklySystemExecutions = users.reduce((acc, u) => {
+  const totalWeeklySystemExecutions = uniqueUsers.reduce((acc, u) => {
     if (!u.active) return acc;
     return acc + calculateTotalWeeklyCheckins(u.weeklySchedule || { mon: u.scheduledTimes, tue: u.scheduledTimes, wed: u.scheduledTimes, thu: u.scheduledTimes, fri: u.scheduledTimes });
   }, 0);
@@ -337,15 +379,36 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
           </p>
         </div>
 
-        <button
-          id="btn-add-user"
-          onClick={handleOpenAdd}
-          className="px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-semibold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-all shrink-0 cursor-pointer"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Agregar Usuario y Horarios Diarios</span>
-        </button>
+        <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            id="btn-dedup-vault"
+            onClick={handleDeduplicateVault}
+            disabled={isDeduplicating}
+            title="Eliminar registros duplicados y optimizar almacenamiento"
+            className="px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+            <span>{isDeduplicating ? 'Optimizando...' : 'Optimizar Bóveda'}</span>
+          </button>
+
+          <button
+            id="btn-add-user"
+            onClick={handleOpenAdd}
+            className="px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white text-xs font-semibold rounded-lg shadow-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Agregar Usuario</span>
+          </button>
+        </div>
       </div>
+
+      {/* Dedup feedback alert */}
+      {dedupMessage && (
+        <div className="bg-emerald-950/80 border border-emerald-800 p-3 rounded-xl flex items-center gap-2.5 text-xs text-emerald-300">
+          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{dedupMessage}</span>
+        </div>
+      )}
 
       {/* 24/7 Persistence Policy & Security Guarantee */}
       <div className="bg-slate-900/60 border border-emerald-500/30 p-3.5 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">

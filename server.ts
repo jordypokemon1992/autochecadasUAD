@@ -134,8 +134,26 @@ try {
   if (fs.existsSync(USERS_FILE)) {
     const raw = fs.readFileSync(USERS_FILE, "utf-8");
     const parsed: UserCredential[] = JSON.parse(raw);
-    parsed.forEach(u => usersDb.set(u.id, u));
-    console.log(`[STORAGE] Loaded ${usersDb.size} users from disk.`);
+    const seenByUsername = new Map<string, UserCredential>();
+    parsed.forEach(u => {
+      const key = u.username ? u.username.trim() : u.id;
+      if (!seenByUsername.has(key)) {
+        seenByUsername.set(key, u);
+      } else {
+        // Merge in case of duplicates
+        const existing = seenByUsername.get(key)!;
+        seenByUsername.set(key, {
+          ...existing,
+          ...u,
+          id: existing.id || u.id,
+          weeklySchedule: u.weeklySchedule || existing.weeklySchedule,
+          scheduledTimes: u.scheduledTimes || existing.scheduledTimes,
+          activeDays: u.activeDays || existing.activeDays,
+        });
+      }
+    });
+    seenByUsername.forEach(u => usersDb.set(u.id, u));
+    console.log(`[STORAGE] Loaded and deduplicated ${usersDb.size} users from disk.`);
   } else {
     seedUsers.forEach(u => usersDb.set(u.id, u));
     persistUsersToDisk();
@@ -596,16 +614,164 @@ app.post("/api/scheduler/toggle-daemon", (req, res) => {
   });
 });
 
-// 2. Users CRUD
+// 2. Users CRUD & Deduplication
+function getDeduplicatedUsersList(): UserCredential[] {
+  const seenByUsername = new Map<string, UserCredential>();
+  for (const u of usersDb.values()) {
+    const key = (u.username || u.id).trim();
+    if (!seenByUsername.has(key)) {
+      seenByUsername.set(key, u);
+    } else {
+      const prev = seenByUsername.get(key)!;
+      // Merge properties if duplicate exists
+      const merged: UserCredential = {
+        ...prev,
+        ...u,
+        id: prev.id || u.id,
+        weeklySchedule: u.weeklySchedule || prev.weeklySchedule,
+        scheduledTimes: u.scheduledTimes || prev.scheduledTimes,
+        activeDays: u.activeDays || prev.activeDays,
+      };
+      seenByUsername.set(key, merged);
+    }
+  }
+  return Array.from(seenByUsername.values());
+}
+
 app.get("/api/users", (_req, res) => {
-  const users = Array.from(usersDb.values());
+  const users = getDeduplicatedUsersList();
+  // Ensure usersDb stays clean
+  if (users.length !== usersDb.size) {
+    usersDb.clear();
+    users.forEach(u => usersDb.set(u.id, u));
+    persistUsersToDisk();
+  }
   res.json(users);
 });
 
+// Batch sync endpoint from Firestore or client (Atomic, deduplicated, 0 duplicate records)
+app.post("/api/users/sync-batch", (req, res) => {
+  const { users: incomingUsers, mode = 'merge' } = req.body;
+  if (!Array.isArray(incomingUsers)) {
+    return res.status(400).json({ error: "Array de usuarios requerido." });
+  }
+
+  if (mode === 'replace') {
+    usersDb.clear();
+  }
+
+  for (const u of incomingUsers) {
+    if (!u.username && !u.name) continue;
+    const targetUsername = (u.username || "").trim();
+    
+    // Find existing user by ID or by username (matrícula)
+    let existing: UserCredential | undefined = undefined;
+    if (u.id && usersDb.has(u.id)) {
+      existing = usersDb.get(u.id);
+    } else if (targetUsername) {
+      existing = Array.from(usersDb.values()).find(
+        usr => usr.username && usr.username.trim() === targetUsername
+      );
+    }
+
+    if (existing) {
+      // Update in-place
+      if (u.name) existing.name = u.name;
+      if (u.email) existing.email = u.email;
+      if (u.username) existing.username = u.username;
+      if (u.roleTag) existing.roleTag = u.roleTag;
+      if (u.notes !== undefined) existing.notes = u.notes;
+      if (u.active !== undefined) existing.active = u.active;
+      if (u.weeklySchedule) existing.weeklySchedule = u.weeklySchedule;
+      if (u.scheduledTimes) existing.scheduledTimes = u.scheduledTimes;
+      if (u.activeDays) existing.activeDays = u.activeDays;
+      if (u.passwordEncrypted) existing.passwordEncrypted = u.passwordEncrypted;
+      if (u.lastRunAt) existing.lastRunAt = u.lastRunAt;
+      if (u.lastStatus) existing.lastStatus = u.lastStatus;
+      usersDb.set(existing.id, existing);
+    } else {
+      // Insert new unique user
+      const userId = u.id || `usr_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+      const newUser: UserCredential = {
+        id: userId,
+        name: u.name,
+        email: u.email || `${u.username}@institucion.edu`,
+        username: u.username,
+        passwordEncrypted: u.passwordEncrypted || "enc_aes256_default",
+        roleTag: u.roleTag || "Docente Titular",
+        active: u.active !== undefined ? u.active : true,
+        weeklySchedule: u.weeklySchedule || { mon: ["08:00"], tue: ["08:00"], wed: ["08:00"], thu: ["08:00"], fri: ["08:00"], sat: [], sun: [] },
+        scheduledTimes: u.scheduledTimes || ["08:00"],
+        activeDays: u.activeDays || ["mon", "tue", "wed", "thu", "fri"],
+        notes: u.notes || "",
+        createdAt: u.createdAt || new Date().toISOString(),
+        lastStatus: u.lastStatus || "pending"
+      };
+      usersDb.set(newUser.id, newUser);
+    }
+  }
+
+  // Deduplicate and persist
+  const cleanList = getDeduplicatedUsersList();
+  usersDb.clear();
+  cleanList.forEach(u => usersDb.set(u.id, u));
+  persistUsersToDisk();
+
+  res.json({
+    success: true,
+    totalUsers: usersDb.size,
+    users: cleanList,
+    message: `Sincronización procesada. ${usersDb.size} docentes únicos en bóveda.`
+  });
+});
+
+// Endpoint to explicitly clean any duplicates
+app.post("/api/users/deduplicate", (_req, res) => {
+  const cleanList = getDeduplicatedUsersList();
+  const removedCount = usersDb.size - cleanList.length;
+  usersDb.clear();
+  cleanList.forEach(u => usersDb.set(u.id, u));
+  persistUsersToDisk();
+  res.json({
+    success: true,
+    removedCount,
+    totalUsers: cleanList.length,
+    users: cleanList,
+    message: `Bóveda optimizada. Se eliminaron ${removedCount} registros duplicados.`
+  });
+});
+
 app.post("/api/users", (req, res) => {
-  const { name, email, username, password, roleTag, notes, weeklySchedule, scheduledTimes, activeDays, active } = req.body;
+  const { id, name, email, username, password, roleTag, notes, weeklySchedule, scheduledTimes, activeDays, active } = req.body;
   if (!name || !username) {
     return res.status(400).json({ error: "Nombre y usuario son requeridos." });
+  }
+
+  const cleanUsername = username.trim();
+  // Check if a user with this username (matrícula) or id already exists
+  const existingUser = (id && usersDb.get(id)) || 
+    Array.from(usersDb.values()).find(u => u.username && u.username.trim() === cleanUsername);
+
+  if (existingUser) {
+    // Update existing user instead of creating duplicate
+    existingUser.name = name;
+    if (email) existingUser.email = email;
+    existingUser.username = cleanUsername;
+    if (roleTag) existingUser.roleTag = roleTag;
+    if (notes !== undefined) existingUser.notes = notes;
+    if (active !== undefined) existingUser.active = active;
+    if (weeklySchedule) existingUser.weeklySchedule = weeklySchedule;
+    if (scheduledTimes) existingUser.scheduledTimes = scheduledTimes;
+    if (activeDays) existingUser.activeDays = activeDays;
+    
+    if (password) {
+      const hash = crypto.createHash("sha256").update(password).digest("hex").slice(0, 16);
+      existingUser.passwordEncrypted = `enc_aes256_${hash}`;
+    }
+
+    usersDb.set(existingUser.id, existingUser);
+    persistUsersToDisk();
+    return res.status(200).json(existingUser);
   }
 
   const hash = crypto.createHash("sha256").update(password || "default_pass").digest("hex").slice(0, 16);
@@ -620,12 +786,12 @@ app.post("/api/users", (req, res) => {
   };
 
   const newUser: UserCredential = {
-    id: `usr_${Date.now()}`,
+    id: id || `usr_${Date.now()}`,
     name,
-    email: email || `${username}@institucion.edu`,
-    username,
+    email: email || `${cleanUsername}@institucion.edu`,
+    username: cleanUsername,
     passwordEncrypted: `enc_aes256_${hash}`,
-    roleTag: roleTag || "Usuario Registrado",
+    roleTag: roleTag || "Docente Titular",
     active: active !== undefined ? active : true,
     weeklySchedule: weeklySchedule || defaultWeekly,
     scheduledTimes: Array.isArray(scheduledTimes) && scheduledTimes.length > 0 
