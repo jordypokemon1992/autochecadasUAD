@@ -90,21 +90,23 @@ jobs:
  * Diseñado para ejecutarse en GitHub Actions o como microservicio desatendido
  */
 
-const { chromium } = require('playwright');
-const { initializeApp, getApps } = require('firebase/app');
-const { 
+import { chromium } from 'playwright';
+import { initializeApp, getApps } from 'firebase/app';
+import { 
   getFirestore, 
   collection, 
   getDocs, 
   doc, 
   setDoc, 
   updateDoc 
-} = require('firebase/firestore');
-require('dotenv').config();
+} from 'firebase/firestore';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 let dbInstance = null;
 
-function getFirebaseDB() {
+export function getFirebaseDB() {
   if (dbInstance) return dbInstance;
 
   const apiKey = process.env.FIREBASE_API_KEY;

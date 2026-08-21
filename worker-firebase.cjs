@@ -1,26 +1,24 @@
 /**
- * WORKER AUTÓNOMO DE PLAYWRIGHT PARA CHECADO UAD
+ * WORKER AUTÓNOMO DE PLAYWRIGHT PARA CHECADO UAD (CommonJS Version)
  * Alimentado dinámicamente desde Firebase Firestore
  * Diseñado para ejecutarse en GitHub Actions o como microservicio desatendido
  */
 
-import { chromium } from 'playwright';
-import { initializeApp, getApps } from 'firebase/app';
-import { 
+const { chromium } = require('playwright');
+const { initializeApp, getApps } = require('firebase/app');
+const { 
   getFirestore, 
   collection, 
   getDocs, 
   doc, 
   setDoc, 
   updateDoc 
-} from 'firebase/firestore';
-import dotenv from 'dotenv';
-
-dotenv.config();
+} = require('firebase/firestore');
+require('dotenv').config();
 
 let dbInstance = null;
 
-export function getFirebaseDB() {
+function getFirebaseDB() {
   if (dbInstance) return dbInstance;
 
   const apiKey = process.env.FIREBASE_API_KEY;
@@ -60,7 +58,7 @@ export function getFirebaseDB() {
 const TARGET_PORTAL = "https://portal.uad.mx/";
 const DAYS_MAP = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
-export function getCDMXTime() {
+function getCDMXTime() {
   const now = new Date();
   const cdmxString = now.toLocaleString("en-US", { timeZone: "America/Mexico_City" });
   const cdmxDate = new Date(cdmxString);
@@ -73,7 +71,7 @@ export function getCDMXTime() {
   return { dayKey, currentTime, cdmxDate, fullISO: cdmxDate.toISOString() };
 }
 
-export async function fetchActiveUsersFromFirebase(db) {
+async function fetchActiveUsersFromFirebase(db) {
   console.log("[FIREBASE] Obteniendo lista de docentes desde colección 'uad_users'...");
   try {
     const snap = await getDocs(collection(db, 'uad_users'));
@@ -93,7 +91,7 @@ export async function fetchActiveUsersFromFirebase(db) {
   }
 }
 
-export async function executeAttendanceCheck(db, user, timeContext) {
+async function executeAttendanceCheck(db, user, timeContext) {
   console.log(`\n==================================================`);
   console.log(`[EJECUTANDO] Docente: ${user.name || user.username} (${user.username})`);
   console.log(`[HORARIO] Hora CDMX: ${timeContext.currentTime} [Día: ${timeContext.dayKey.toUpperCase()}]`);
@@ -216,7 +214,7 @@ export async function executeAttendanceCheck(db, user, timeContext) {
   }
 }
 
-export async function main() {
+async function main() {
   console.log("=================================================");
   console.log("  ORQUESTADOR UAD (GITHUB ACTIONS + FIREBASE)");
   console.log("=================================================");
@@ -277,4 +275,4 @@ main().catch(err => {
   process.exit(1);
 });
 
-
+module.exports = { executeAttendanceCheck, fetchActiveUsersFromFirebase, getFirebaseDB };
