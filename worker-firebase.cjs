@@ -36,10 +36,6 @@ function getFirebaseDB() {
     console.error("=================================================");
     console.error("Faltan las siguientes variables de entorno secretas:");
     missing.forEach(m => console.error(`  - ${m}`));
-    console.error("\n👉 CÓMO SOLUCIONARLO:");
-    console.error("1. Ve a tu repositorio en GitHub > Settings > Secrets and variables > Actions");
-    console.error("2. Haz clic en 'New repository secret' y agrega cada una con sus valores de Firebase.");
-    console.error("=================================================\n");
     throw new Error(`Faltan secrets requeridos en GitHub: ${missing.join(', ')}`);
   }
 
@@ -57,18 +53,19 @@ function getFirebaseDB() {
 
 const TARGET_PORTAL = "https://portal.uad.mx/";
 const DAYS_MAP = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const TARGET_TIMEZONE = process.env.TIMEZONE || "America/Mazatlan"; // Los Mochis, Sinaloa (UTC-7)
 
-function getCDMXTime() {
+function getLocalTime() {
   const now = new Date();
-  const cdmxString = now.toLocaleString("en-US", { timeZone: "America/Mexico_City" });
-  const cdmxDate = new Date(cdmxString);
+  const timeString = now.toLocaleString("en-US", { timeZone: TARGET_TIMEZONE });
+  const localDate = new Date(timeString);
   
-  const dayKey = DAYS_MAP[cdmxDate.getDay()];
-  const hh = String(cdmxDate.getHours()).padStart(2, '0');
-  const mm = String(cdmxDate.getMinutes()).padStart(2, '0');
+  const dayKey = DAYS_MAP[localDate.getDay()];
+  const hh = String(localDate.getHours()).padStart(2, '0');
+  const mm = String(localDate.getMinutes()).padStart(2, '0');
   const currentTime = `${hh}:${mm}`;
   
-  return { dayKey, currentTime, cdmxDate, fullISO: cdmxDate.toISOString() };
+  return { dayKey, currentTime, localDate, timezone: TARGET_TIMEZONE, fullISO: localDate.toISOString() };
 }
 
 async function fetchActiveUsersFromFirebase(db) {
@@ -86,7 +83,6 @@ async function fetchActiveUsersFromFirebase(db) {
     return users;
   } catch (error) {
     console.error("[FIREBASE ERROR] No se pudo leer la colección 'uad_users':", error.message);
-    console.error("👉 Asegúrate de que las Reglas de Firestore en Firebase Console permitan lectura/escritura.");
     throw error;
   }
 }
@@ -94,7 +90,7 @@ async function fetchActiveUsersFromFirebase(db) {
 async function executeAttendanceCheck(db, user, timeContext) {
   console.log(`\n==================================================`);
   console.log(`[EJECUTANDO] Docente: ${user.name || user.username} (${user.username})`);
-  console.log(`[HORARIO] Hora CDMX: ${timeContext.currentTime} [Día: ${timeContext.dayKey.toUpperCase()}]`);
+  console.log(`[HORARIO] Hora Los Mochis, Sin.: ${timeContext.currentTime} [Día: ${timeContext.dayKey.toUpperCase()}]`);
 
   const browser = await chromium.launch({
     headless: true,
@@ -111,46 +107,92 @@ async function executeAttendanceCheck(db, user, timeContext) {
   let message = '';
   const startTime = Date.now();
 
+  page.on('dialog', async dialog => {
+    console.log(`[ALERTA DETECTADA] Tipo: ${dialog.type()}, Mensaje: "${dialog.message()}"`);
+    await dialog.accept().catch(() => {});
+  });
+
   try {
     // 1. Acceso a URL
     console.log(`[1/5] Accediendo a ${TARGET_PORTAL}...`);
-    await page.goto(TARGET_PORTAL, { waitUntil: 'networkidle', timeout: 35000 });
+    await page.goto(TARGET_PORTAL, { waitUntil: 'domcontentloaded', timeout: 35000 });
+    await page.waitForTimeout(2000);
 
-    // Descartar comunicado institucional si existe
-    try {
-      const modal = await page.$("#modal-comunicado.in, #modal-comunicado.show, #modal-comunicado:not([style*='display: none'])");
-      if (modal) {
-        console.log("[AVISO] Modal institucional detectado. Descartando...");
-        await page.click("#modal-comunicado .close, #modal-comunicado button").catch(() => {});
-      }
-    } catch (e) {
-      // ignore
-    }
+    const dismissModals = async () => {
+      try {
+        const modals = await page.$$("#modal-comunicado, .modal.in, .modal.show, .swal2-container, .sweet-alert, div[role='dialog']");
+        for (const m of modals) {
+          const isVisible = await m.isVisible().catch(() => false);
+          if (isVisible) {
+            console.log("[AVISO] Modal o comunicado detectado. Descartando...");
+            await page.click("#modal-comunicado .close, #modal-comunicado button, .modal .close, button:has-text('Cerrar'), button:has-text('Entendido'), button:has-text('OK'), button.swal2-confirm").catch(() => {});
+            await page.waitForTimeout(1000);
+          }
+        }
+      } catch (_) {}
+    };
+
+    await dismissModals();
 
     // 2. Inyectar credenciales con selectores exactos
     console.log(`[2/5] Ingresando matrícula en #user y contraseña en #pass...`);
-    await page.waitForSelector("#user, input[name='_usuario_']", { timeout: 12000 });
+    await page.waitForSelector("#user, input[name='_usuario_']", { timeout: 15000 });
     await page.fill("#user, input[name='_usuario_']", user.username);
     await page.fill("#pass, input[name='_pass_']", user.password || user.passwordEncrypted || "");
 
     // 3. Enviar login con #boton (icono fa-paw)
     console.log(`[3/5] Enviando login mediante #boton...`);
     await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle', timeout: 25000 }).catch(() => {}),
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {}),
       page.click("#boton, button[name='boton'], button:has(.fa-paw), #formulario_inicio button[type='submit']")
     ]);
 
-    // 4. Navegar a menú lateral Horario
-    console.log(`[4/5] Navegando a la sección 'Horario'...`);
-    await page.click("a:has-text('Horario'), .sidebar-menu a[href*='horario'], nav :text('Horario')");
-    await page.waitForSelector("table, .table-responsive, :has-text('Horario')", { timeout: 15000 });
+    await page.waitForTimeout(3000);
+    await dismissModals();
 
-    // 5. Localizar y pulsar botón verde 'Checar' (#boton_checar)
-    console.log(`[5/5] Localizando botón verde 'Checar' (#boton_checar)...`);
-    const checarSelector = "#boton_checar, button#boton_checar, button[onclick*='checar'], button:has-text('Checar'), .btn-success.btn-lg";
-    await page.waitForSelector(checarSelector, { timeout: 10000 });
-    const checkBtn = await page.$(checarSelector);
+    // 4. Localizar botón verde #boton_checar directamente o navegar a Horario
+    console.log(`[4/5] Localizando panel o botón de checado...`);
+    const checarSelector = "#boton_checar, button#boton_checar, button[onclick*='checar'], button:has-text('Checar'), .btn-success.btn-lg, button:has(.fa-hand-pointer-o)";
+    
+    let checkBtn = await page.$(checarSelector);
 
+    if (!checkBtn) {
+      console.log(`[NAVEGACIÓN] Intentando acceder a la pestaña 'Horario'...`);
+      const sidebarToggle = await page.$(".sidebar-toggle, [data-toggle='offcanvas'], [data-toggle='push-menu'], .navbar-toggle, button.navbar-toggler");
+      if (sidebarToggle) {
+        await sidebarToggle.click().catch(() => {});
+        await page.waitForTimeout(500);
+      }
+
+      const horarioSelectors = [
+        "a[href*='horario' i]",
+        "a[href*='Horario']",
+        "a:has-text('Horario')",
+        "a:has-text('HORARIO')",
+        ".sidebar-menu a:has-text('Horario')",
+        "nav a:has-text('Horario')",
+        "li:has-text('Horario') a",
+        "span:has-text('Horario')"
+      ];
+
+      for (const sel of horarioSelectors) {
+        try {
+          const el = await page.$(sel);
+          if (el && await el.isVisible()) {
+            console.log(`[MENÚ] Clic en enlace de Horario (${sel})...`);
+            await el.click();
+            await page.waitForTimeout(2500);
+            await dismissModals();
+            break;
+          }
+        } catch (_) {}
+      }
+
+      checkBtn = await page.$(checarSelector);
+    }
+
+    // 5. Presionar botón verde 'Checar' (#boton_checar)
+    console.log(`[5/5] Evaluando botón verde 'Checar' (#boton_checar)...`);
     if (checkBtn) {
       const isEnabled = await checkBtn.isEnabled();
       if (isEnabled) {
@@ -161,28 +203,26 @@ async function executeAttendanceCheck(db, user, timeContext) {
         await page.waitForTimeout(2000);
       } else {
         status = 'success';
-        message = `El botón 'Checar' no estaba activo en este minuto para ${user.name || user.username}.`;
+        message = `El botón 'Checar' está presente pero inactivo para este minuto para ${user.name || user.username}.`;
         console.log(`[INFO] ${message}`);
       }
     } else {
-      status = 'failed';
-      message = "No se localizó el botón #boton_checar en el DOM.";
-      console.log(`[AVISO] ${message}`);
+      const checadoBadge = await page.$(":has-text('[Checado]'), .label-success:has-text('Checado'), span:has-text('Checado')");
+      if (checadoBadge) {
+        status = 'success';
+        message = `Asistencia confirmada: Insignia '[Checado]' presente en el portal para ${user.name || user.username}.`;
+        console.log(`[✓ ASISTENCIA CONFIRMADA] ${message}`);
+      } else {
+        status = 'failed';
+        message = `Sesión iniciada correctamente, pero no se encontró #boton_checar disponible en este momento.`;
+        console.log(`[AVISO] ${message}`);
+      }
     }
-
-    // Captura de pantalla para auditoría
-    const screenshotName = `audit_${user.username}_${Date.now()}.png`;
-    await page.screenshot({ path: screenshotName, fullPage: true });
-    console.log(`[EVIDENCIA] Captura guardada: ${screenshotName}`);
 
   } catch (error) {
     status = 'failed';
     message = `Error en automatización: ${error.message}`;
     console.error(`[ERROR] ${message}`);
-    try {
-      const errShot = `error_${user.username}_${Date.now()}.png`;
-      await page.screenshot({ path: errShot, fullPage: true });
-    } catch (_) {}
   } finally {
     await browser.close();
   }
@@ -201,7 +241,8 @@ async function executeAttendanceCheck(db, user, timeContext) {
       durationMs,
       executedAt: new Date().toISOString(),
       timeContext: timeContext.currentTime,
-      day: timeContext.dayKey
+      day: timeContext.dayKey,
+      timezone: timeContext.timezone
     });
 
     await updateDoc(doc(db, 'uad_users', user.id), {
@@ -220,53 +261,75 @@ async function main() {
   console.log("=================================================");
 
   const db = getFirebaseDB();
-  const timeContext = getCDMXTime();
-  console.log(`[ZONA HORARIA CDMX] Hora: ${timeContext.currentTime} | Día: ${timeContext.dayKey.toUpperCase()}`);
+  const startTime = Date.now();
+  const MAX_ACTIVE_WINDOW_MS = 20 * 60 * 1000; // 20 minutos de actividad
+  const POLL_INTERVAL_MS = 60 * 1000; // Sondeo cada 60s
+  const processedInSession = new Set();
 
-  const allUsers = await fetchActiveUsersFromFirebase(db);
   const targetFilter = process.env.TARGET_USER_INPUT || 'all';
+  const isManualRun = targetFilter !== 'all';
 
-  if (allUsers.length === 0) {
-    console.log("=================================================");
-    console.log("⚠️ AVISO: No hay docentes en la colección 'uad_users'.");
-    console.log("Para sincronizar docentes:");
-    console.log("1. Abre la aplicación web > pestaña 'Vinculación Firebase'");
-    console.log("2. Haz clic en 'Subir Docentes Locales a Firestore'");
-    console.log("=================================================");
-    return;
-  }
+  let cycle = 1;
 
-  let executedCount = 0;
+  do {
+    const timeContext = getLocalTime();
+    console.log(`\n--- CICLO #${cycle} | Los Mochis, Sinaloa (${timeContext.timezone}) | Hora: ${timeContext.currentTime} [${timeContext.dayKey.toUpperCase()}] ---`);
 
-  for (const user of allUsers) {
-    if (targetFilter !== 'all' && user.id !== targetFilter && user.username !== targetFilter) {
-      continue;
+    const allUsers = await fetchActiveUsersFromFirebase(db);
+
+    if (allUsers.length === 0) {
+      console.log("=================================================");
+      console.log("⚠️ AVISO: No hay docentes en la colección 'uad_users'.");
+      console.log("=================================================");
+      break;
     }
 
-    const schedule = user.weeklySchedule || {};
-    const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
+    for (const user of allUsers) {
+      if (targetFilter !== 'all' && user.id !== targetFilter && user.username !== targetFilter) {
+        continue;
+      }
 
-    // Si el usuario disparó manualmente o si corresponde por horario (ventana ±15 min)
-    const isManualRun = targetFilter !== 'all';
-    const shouldRunNow = isManualRun || dayTimes.some(t => {
-      const [th, tm] = t.split(':').map(Number);
-      const [ch, cm] = timeContext.currentTime.split(':').map(Number);
-      const targetMin = th * 60 + tm;
-      const currentMin = ch * 60 + cm;
-      return Math.abs(currentMin - targetMin) <= 15;
-    });
+      const schedule = user.weeklySchedule || {};
+      const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
 
-    if (shouldRunNow) {
-      executedCount++;
-      await executeAttendanceCheck(db, user, timeContext);
-      await new Promise(r => setTimeout(r, 2000));
+      const userBlockKey = `${user.id}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`;
+      if (!isManualRun && processedInSession.has(userBlockKey)) {
+        continue;
+      }
+
+      const shouldRunNow = isManualRun || dayTimes.some(t => {
+        const [th, tm] = t.split(':').map(Number);
+        const [ch, cm] = timeContext.currentTime.split(':').map(Number);
+        const targetMin = th * 60 + tm;
+        const currentMin = ch * 60 + cm;
+        return Math.abs(currentMin - targetMin) <= 10;
+      });
+
+      if (shouldRunNow) {
+        await executeAttendanceCheck(db, user, timeContext);
+        processedInSession.add(userBlockKey);
+        await new Promise(r => setTimeout(r, 2000));
+      } else {
+        console.log(`[EN ESPERA] ${user.name || user.username} (${user.username}) sin horario en este minuto ${timeContext.currentTime} (Horarios: ${dayTimes.join(', ') || 'Ninguno'}).`);
+      }
+    }
+
+    if (isManualRun) break;
+
+    const elapsed = Date.now() - startTime;
+    if (elapsed + POLL_INTERVAL_MS < MAX_ACTIVE_WINDOW_MS) {
+      const remainingSecs = Math.round((MAX_ACTIVE_WINDOW_MS - elapsed) / 1000);
+      console.log(`[VENTANA ACTIVA] Esperando 60s antes del siguiente ciclo... (Restante: ${remainingSecs}s)`);
+      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+      cycle++;
     } else {
-      console.log(`[OMITIDO] ${user.name || user.username} (${user.username}) sin horario a las ${timeContext.currentTime} (Horarios: ${dayTimes.join(', ') || 'Ninguno'}).`);
+      break;
     }
-  }
+
+  } while (Date.now() - startTime < MAX_ACTIVE_WINDOW_MS);
 
   console.log("\n=================================================");
-  console.log(`  PROCESO COMPLETADO: ${executedCount} docente(s) procesado(s)`);
+  console.log(`  VENTANA DE 20 MINUTOS FINALIZADA CON ÉXITO`);
   console.log("=================================================");
 }
 

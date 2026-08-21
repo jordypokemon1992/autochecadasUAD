@@ -2,8 +2,12 @@ name: UAD Automation Runner (Firebase Driven)
 
 on:
   schedule:
-    # Se ejecuta cada 15 minutos en días hábiles (Lunes a Viernes)
-    - cron: '*/15 13-23 * * 1-5'
+    # Se ejecuta a los 45 minutos de cada hora:
+    # 06:45 AM hasta 21:45 PM (Los Mochis, Sinaloa / UTC-7)
+    # 06:45 MST = 13:45 UTC ... 21:45 MST = 04:45 UTC del día siguiente
+    # Lunes a Viernes
+    - cron: '45 13-23 * * 1-5'
+    - cron: '45 0-4 * * 2-6'
   workflow_dispatch: # Permite disparar manualmente con un clic en cualquier momento
     inputs:
       target_user_id:
@@ -14,7 +18,7 @@ on:
 jobs:
   execute-attendance:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
       - name: Checkout del Repositorio
@@ -36,14 +40,6 @@ jobs:
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
           TARGET_USER_INPUT: ${{ github.event.inputs.target_user_id || 'all' }}
+          TIMEZONE: 'America/Mazatlan'
         run: node worker-firebase.js
-
-      - name: Subir Evidencias de Captura y Auditoría
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: evidencias-checado-uad-${{ github.run_id }}
-          path: '*.png'
-          if-no-files-found: ignore
-          retention-days: 14
 
