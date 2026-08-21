@@ -1,0 +1,8 @@
+{
+  "name": "CloudFlow Orchestrator",
+  "description": "Sistema de automatización y orquestación en la nube para flujos de trabajo programados con bóveda de credenciales, programador cron y monitor de ejecución desatendida.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

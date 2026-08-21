@@ -1,0 +1,47 @@
+name: UAD Automation Runner (Firebase Driven)
+
+on:
+  schedule:
+    # Se ejecuta cada 15 minutos en días hábiles (Lunes a Viernes)
+    - cron: '*/15 13-23 * * 1-5'
+  workflow_dispatch: # Permite disparar manualmente con un clic en cualquier momento
+    inputs:
+      target_user_id:
+        description: 'Matrícula o ID específico de docente (opcional)'
+        required: false
+        default: 'all'
+
+jobs:
+  execute-attendance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout del Repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Instalar Dependencias y Playwright Chromium
+        run: |
+          npm install firebase dotenv playwright
+          npx playwright install chromium --with-deps
+
+      - name: Ejecutar Checado Desatendido (Conectado a Firebase)
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          TARGET_USER_INPUT: ${{ github.event.inputs.target_user_id || 'all' }}
+        run: node worker-firebase.js
+
+      - name: Subir Evidencias de Captura y Auditoría
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidencias-checado-uad-${{ github.run_id }}
+          path: '*.png'
+          retention-days: 14
