@@ -765,8 +765,8 @@ app.post("/api/users", (req, res) => {
     if (activeDays) existingUser.activeDays = activeDays;
     
     if (password) {
-      const hash = crypto.createHash("sha256").update(password).digest("hex").slice(0, 16);
-      existingUser.passwordEncrypted = `enc_aes256_${hash}`;
+      existingUser.password = password;
+      existingUser.passwordEncrypted = password;
     }
 
     usersDb.set(existingUser.id, existingUser);
@@ -774,7 +774,7 @@ app.post("/api/users", (req, res) => {
     return res.status(200).json(existingUser);
   }
 
-  const hash = crypto.createHash("sha256").update(password || "default_pass").digest("hex").slice(0, 16);
+  const rawPassword = password || "default_pass";
   const defaultWeekly: Record<string, string[]> = {
     mon: ["08:00", "09:45", "12:45"],
     tue: ["08:00", "09:45", "12:45"],
@@ -790,7 +790,8 @@ app.post("/api/users", (req, res) => {
     name,
     email: email || `${cleanUsername}@institucion.edu`,
     username: cleanUsername,
-    passwordEncrypted: `enc_aes256_${hash}`,
+    password: rawPassword,
+    passwordEncrypted: rawPassword,
     roleTag: roleTag || "Docente Titular",
     active: active !== undefined ? active : true,
     weeklySchedule: weeklySchedule || defaultWeekly,

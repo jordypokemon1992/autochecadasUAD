@@ -7,6 +7,7 @@ export interface UserCredential {
   name: string;
   email: string;
   username: string;
+  password?: string;
   passwordEncrypted: string;
   roleTag: string;
   active: boolean;

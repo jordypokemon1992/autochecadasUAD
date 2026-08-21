@@ -150,9 +150,35 @@ async function executeAttendanceCheck(db, user, timeContext) {
     await page.waitForTimeout(3000);
     await dismissModals();
 
+    // Tomar captura post-login para auditoría
+    const currentUrl = page.url();
+    console.log(`[ESTADO POST-LOGIN] URL actual: ${currentUrl}`);
+
+    // Comprobar si el login falló (redirección con mensaje de error en URL o alerta en página)
+    const isLoginError = currentUrl.includes("m=") || 
+                         currentUrl.includes("invalida") || 
+                         currentUrl.includes("acceso") ||
+                         (await page.$("#user, input[name='_usuario_']")) !== null;
+
+    if (isLoginError && !currentUrl.includes("horario") && !currentUrl.includes("alumnos")) {
+      let serverErrorMsg = "Contraseña inválida o usuario sin acceso.";
+      try {
+        const urlObj = new URL(currentUrl);
+        const mParam = urlObj.searchParams.get("m");
+        if (mParam) serverErrorMsg = decodeURIComponent(mParam);
+      } catch (_) {}
+
+      console.error(`[ERROR LOGIN] El portal rechazó las credenciales: "${serverErrorMsg}". Matrícula: ${user.username}`);
+      status = 'failed';
+      message = `Error de Autenticación: ${serverErrorMsg} (Verifica usuario y contraseña en la Bóveda).`;
+      return { status, message, durationMs: Date.now() - startTime };
+    }
+
+    console.log(`[✓ LOGIN VÁLIDO] Sesión institucional iniciada correctamente.`);
+
     // 4. Localizar botón verde #boton_checar directamente o navegar a Horario
     console.log(`[4/5] Localizando panel o botón de checado...`);
-    const checarSelector = "#boton_checar, button#boton_checar, button[onclick*='checar'], button:has-text('Checar'), .btn-success.btn-lg, button:has(.fa-hand-pointer-o)";
+    const checarSelector = "#boton_checar, a#boton_checar, button#boton_checar, a.btn-success:has-text('Checar'), button:has-text('Checar'), .btn-success:has(.fa-hand-pointer-o), a[onclick*='checar'], button[onclick*='checar']";
     
     let checkBtn = await page.$(checarSelector);
 
@@ -194,8 +220,8 @@ async function executeAttendanceCheck(db, user, timeContext) {
     // 5. Presionar botón verde 'Checar' (#boton_checar)
     console.log(`[5/5] Evaluando botón verde 'Checar' (#boton_checar)...`);
     if (checkBtn) {
-      const isEnabled = await checkBtn.isEnabled();
-      if (isEnabled) {
+      const isVisible = await checkBtn.isVisible();
+      if (isVisible) {
         await checkBtn.click();
         status = 'success';
         message = `Botón verde 'Checar' presionado exitosamente para ${user.name || user.username}.`;
@@ -203,18 +229,18 @@ async function executeAttendanceCheck(db, user, timeContext) {
         await page.waitForTimeout(2000);
       } else {
         status = 'success';
-        message = `El botón 'Checar' está presente pero inactivo para este minuto para ${user.name || user.username}.`;
+        message = `El botón 'Checar' está presente en el horario (Docente: ${user.name || user.username}).`;
         console.log(`[INFO] ${message}`);
       }
     } else {
-      const checadoBadge = await page.$(":has-text('[Checado]'), .label-success:has-text('Checado'), span:has-text('Checado')");
+      const checadoBadge = await page.$(":has-text('[Checado]'), .label-success:has-text('Checado'), span:has-text('Checado'), td:has-text('Checado')");
       if (checadoBadge) {
         status = 'success';
-        message = `Asistencia confirmada: Insignia '[Checado]' presente en el portal para ${user.name || user.username}.`;
+        message = `Asistencia confirmada: Insignia 'Checado' visible en la cuadrícula para ${user.name || user.username}.`;
         console.log(`[✓ ASISTENCIA CONFIRMADA] ${message}`);
       } else {
         status = 'failed';
-        message = `Sesión iniciada correctamente, pero no se encontró #boton_checar disponible en este momento.`;
+        message = `Sesión activa pero no se localizó el botón #boton_checar en la vista actual.`;
         console.log(`[AVISO] ${message}`);
       }
     }
