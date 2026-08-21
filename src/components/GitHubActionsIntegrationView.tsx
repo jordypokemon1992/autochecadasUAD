@@ -26,7 +26,7 @@ interface GitHubActionsIntegrationViewProps {
 
 export const GitHubActionsIntegrationView: React.FC<GitHubActionsIntegrationViewProps> = ({ users }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'workflow' | 'worker' | 'secrets' | 'architecture'>('workflow');
+  const [activeTab, setActiveTab] = useState<'workflow' | 'worker' | 'cronjob' | 'secrets' | 'architecture'>('workflow');
 
   const copyToClipboard = (text: string, key: string) => {
     navigator.clipboard.writeText(text);
@@ -44,12 +44,17 @@ on:
     # Lunes a Viernes
     - cron: '45 13-23 * * 1-5'
     - cron: '45 0-4 * * 2-6'
-  workflow_dispatch: # Permite disparar manualmente con un clic en cualquier momento
+  workflow_dispatch: # Permite disparar manualmente o vía API externa (cron-job.org) en cualquier momento
     inputs:
       target_user_id:
         description: 'Matrícula o ID específico de docente (opcional, deja "all" para todos)'
         required: false
         default: 'all'
+
+# CONTROL DE CONCURRENCIA: Bloqueo estricto para evitar ejecuciones simultáneas
+concurrency:
+  group: uad-attendance-runner-lock
+  cancel-in-progress: false
 
 jobs:
   execute-attendance:
@@ -553,6 +558,18 @@ main().catch(err => {
           </button>
 
           <button
+            onClick={() => setActiveTab('cronjob')}
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors border-t border-l border-r ${
+              activeTab === 'cronjob'
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-transparent text-slate-600 hover:text-slate-900 border-transparent'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Disparador Cero Lag (Cron-Job.org)</span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('secrets')}
             className={`flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-t-lg transition-colors border-t border-l border-r ${
               activeTab === 'secrets'
@@ -634,6 +651,85 @@ main().catch(err => {
               <pre className="p-4 bg-slate-950 rounded-xl border border-slate-800 text-xs font-mono text-amber-200 overflow-x-auto max-h-96">
                 {workerFirebaseJs}
               </pre>
+            </div>
+          )}
+
+          {activeTab === 'cronjob' && (
+            <div className="space-y-5">
+              <div>
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-cyan-400" />
+                  <span>Eliminar Retrasos con Cron-Job.org (Disparo Prioritario al Segundo Exacto)</span>
+                </h4>
+                <p className="text-xs text-slate-400 mt-1">
+                  En lugar de esperar la cola interna del cron de GitHub (que puede demorar de 5 a 20 min en horas pico), <strong>Cron-Job.org</strong> (gratuito) hace una llamada a la API de GitHub en el segundo exacto, iniciando el Runner inmediatamente con prioridad alta.
+                </p>
+              </div>
+
+              {/* Step 1: Token */}
+              <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-cyan-400 uppercase tracking-wider">
+                  <span className="w-5 h-5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800 flex items-center justify-center text-[10px] font-bold">1</span>
+                  <span>Generar Token Personal de GitHub (Fine-grained o Classic PAT)</span>
+                </div>
+                <p className="text-xs text-slate-300">
+                  Para que Cron-job.org tenga permiso de activar tu workflow:
+                </p>
+                <ol className="list-decimal pl-5 text-xs text-slate-400 space-y-1.5">
+                  <li>Ve a <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" className="text-cyan-400 underline inline-flex items-center gap-0.5">github.com/settings/tokens <ExternalLink className="w-2.5 h-2.5" /></a> &gt; <strong>Generate new token (classic)</strong>.</li>
+                  <li>Asígnale el nombre <code>cronjob-runner</code> y marca la casilla <strong>repo</strong> (o <strong>workflow</strong>).</li>
+                  <li>Copia el token generado (ejemplo: <code>ghp_xxxxxxxxxxxxxxxxxxxx</code>).</li>
+                </ol>
+              </div>
+
+              {/* Step 2: Cron Job setup */}
+              <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+                <div className="flex items-center gap-2 text-xs font-bold text-cyan-400 uppercase tracking-wider">
+                  <span className="w-5 h-5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800 flex items-center justify-center text-[10px] font-bold">2</span>
+                  <span>Crear el Cron Job en Cron-Job.org (Gratuito)</span>
+                </div>
+                <p className="text-xs text-slate-300">
+                  Crea una cuenta gratuita en <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="text-cyan-400 underline inline-flex items-center gap-0.5">cron-job.org <ExternalLink className="w-2.5 h-2.5" /></a> &gt; <strong>Create Cronjob</strong>:
+                </p>
+                
+                <div className="bg-slate-900 border border-slate-800 rounded-lg p-3 space-y-2 text-xs font-mono">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <span className="text-slate-400">URL del Webhook:</span>
+                    <span className="text-amber-300 break-all select-all">https://api.github.com/repos/TU_USUARIO/TU_REPOSITORIO/actions/workflows/checador.yml/dispatches</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-slate-400">Método HTTP:</span>
+                    <span className="text-emerald-400 font-bold">POST</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-slate-400">Programación (Horario):</span>
+                    <span className="text-cyan-300">Minuto 45 de cada hora (Lunes a Viernes)</span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-1 pt-1 border-t border-slate-800">
+                    <span className="text-slate-400">Headers (Pestaña Headers):</span>
+                    <div className="text-slate-300 space-y-0.5 text-right sm:text-left">
+                      <div><code>Accept: application/vnd.github.v3+json</code></div>
+                      <div><code>Authorization: Bearer TU_GITHUB_TOKEN</code></div>
+                      <div><code>User-Agent: CronJob-UAD</code></div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-1 pt-1 border-t border-slate-800">
+                    <span className="text-slate-400">Request Body (Cuerpo JSON):</span>
+                    <span className="text-emerald-300 font-mono">{'{"ref": "main"}'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 3: Concurrency protection reminder */}
+              <div className="p-4 bg-emerald-950/40 border border-emerald-800/60 rounded-xl text-xs text-emerald-200 flex items-start gap-3">
+                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="text-emerald-100 font-semibold">Protección contra Llamadas Simultáneas ya Activa:</strong>
+                  <p className="text-[11px] text-emerald-300/90 mt-0.5">
+                    El workflow ya tiene configurado el grupo de concurrencia <code className="bg-emerald-900/60 px-1 py-0.5 rounded text-emerald-200 font-mono">concurrency.group: uad-attendance-runner-lock</code>. Si un job está corriendo y entra otro disparo de Cron-Job.org o manual, GitHub <strong>lo encola ordenadamente sin solapar dos navegadores al mismo tiempo</strong>, garantizando que nunca se realicen checadas duplicadas.
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 

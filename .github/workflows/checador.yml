@@ -8,12 +8,17 @@ on:
     # Lunes a Viernes
     - cron: '45 13-23 * * 1-5'
     - cron: '45 0-4 * * 2-6'
-  workflow_dispatch: # Permite disparar manualmente con un clic en cualquier momento
+  workflow_dispatch: # Permite disparar manualmente o vía API externa (cron-job.org) en cualquier momento
     inputs:
       target_user_id:
         description: 'Matrícula o ID específico de docente (opcional, deja "all" para todos)'
         required: false
         default: 'all'
+
+# CONTROL DE CONCURRENCIA: Evita que existan 2 o más ejecuciones simultáneas del worker
+concurrency:
+  group: uad-attendance-runner-lock
+  cancel-in-progress: false
 
 jobs:
   execute-attendance:
