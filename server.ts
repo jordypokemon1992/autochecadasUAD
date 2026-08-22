@@ -1138,6 +1138,11 @@ module.exports = { executeAutomationForUser, main };
   res.send(scriptContent);
 });
 
+// Guard: Ensure any unhandled /api route returns JSON, preventing fallback to Vite HTML
+app.all("/api/*", (_req, res) => {
+  res.status(404).json({ error: "Endpoint no encontrado o no disponible" });
+});
+
 async function startServer() {
   // Vite integration
   if (process.env.NODE_ENV !== "production") {

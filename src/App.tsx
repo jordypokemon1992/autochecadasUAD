@@ -22,20 +22,35 @@ export default function App() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [currentRunnerExecutions, setCurrentRunnerExecutions] = useState<ExecutionRecord[]>([]);
 
+  // Safe JSON fetch helper
+  const safeFetchJson = async <T,>(url: string): Promise<T | null> => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const contentType = res.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        return null;
+      }
+      return await res.json();
+    } catch {
+      return null;
+    }
+  };
+
   // Fetch initial data
   const fetchData = async () => {
     try {
-      const [usersRes, jobsRes, execRes, healthRes] = await Promise.all([
-        fetch('/api/users'),
-        fetch('/api/jobs'),
-        fetch('/api/executions'),
-        fetch('/api/health'),
+      const [usersData, jobsData, execData, healthData] = await Promise.all([
+        safeFetchJson<UserCredential[]>('/api/users'),
+        safeFetchJson<AutomationJob[]>('/api/jobs'),
+        safeFetchJson<ExecutionRecord[]>('/api/executions'),
+        safeFetchJson<SystemHealthStatus>('/api/health'),
       ]);
 
-      if (usersRes.ok) setUsers(await usersRes.json());
-      if (jobsRes.ok) setJobs(await jobsRes.json());
-      if (execRes.ok) setExecutions(await execRes.json());
-      if (healthRes.ok) setHealth(await healthRes.json());
+      if (usersData) setUsers(usersData);
+      if (jobsData) setJobs(jobsData);
+      if (execData) setExecutions(execData);
+      if (healthData) setHealth(healthData);
     } catch (err) {
       console.error('Error fetching initial data:', err);
     }
