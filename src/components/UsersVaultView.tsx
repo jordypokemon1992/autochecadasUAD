@@ -593,13 +593,13 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
                         <div className="hidden lg:flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-800 text-xs text-slate-400 font-mono">
                           <Lock className="w-3 h-3 text-cyan-400" />
                           <span>
-                            {isVisible ? '••••••••••••' : user.passwordEncrypted.slice(0, 14) + '...'}
+                            {isVisible ? (user.password || user.passwordEncrypted) : '••••••••••••'}
                           </span>
                           <button
                             type="button"
                             onClick={() => togglePasswordVisibility(user.id)}
                             className="text-slate-400 hover:text-slate-200 ml-1 cursor-pointer"
-                            title="Alternar vista de token"
+                            title={isVisible ? "Ocultar contraseña" : "Ver contraseña"}
                           >
                             {isVisible ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                           </button>

@@ -308,6 +308,56 @@ export async function executeAttendanceCheck(db, user, timeContext) {
   }
 }
 
+export function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) {
+  const [currentH, currentM] = timeContext.currentTime.split(':').map(Number);
+  const currentTotalMin = currentH * 60 + currentM;
+  const windowEndMin = currentTotalMin + windowMinutes;
+
+  const scheduledInWindow = [];
+  const upcomingToday = [];
+
+  for (const user of users) {
+    const schedule = user.weeklySchedule || {};
+    const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
+
+    for (const timeStr of dayTimes) {
+      if (!timeStr || !timeStr.includes(':')) continue;
+      const [th, tm] = timeStr.split(':').map(Number);
+      const totalMin = th * 60 + tm;
+
+      // Dentro de la ventana de los próximos 20 minutos (margen +-10 min)
+      if (totalMin >= (currentTotalMin - 10) && totalMin <= (windowEndMin + 10)) {
+        scheduledInWindow.push({
+          userId: user.id,
+          userName: user.name || user.username,
+          username: user.username,
+          time: timeStr,
+          minutesDiff: totalMin - currentTotalMin
+        });
+      }
+
+      if (totalMin >= (currentTotalMin - 10)) {
+        upcomingToday.push({
+          userId: user.id,
+          userName: user.name || user.username,
+          username: user.username,
+          time: timeStr,
+          minutesDiff: totalMin - currentTotalMin
+        });
+      }
+    }
+  }
+
+  upcomingToday.sort((a, b) => a.minutesDiff - b.minutesDiff);
+
+  return {
+    hasUpcomingInWindow: scheduledInWindow.length > 0,
+    scheduledInWindow,
+    nextCheckToday: upcomingToday[0] || null,
+    totalTodayUpcoming: upcomingToday.length
+  };
+}
+
 export async function main() {
   console.log("=================================================");
   console.log("  ORQUESTADOR UAD (GITHUB ACTIONS + FIREBASE)");
@@ -315,31 +365,63 @@ export async function main() {
 
   const db = getFirebaseDB();
   const startTime = Date.now();
-  // Se mantiene activo durante 20 minutos (1,200,000 ms)
-  const MAX_ACTIVE_WINDOW_MS = 20 * 60 * 1000;
+  const MAX_ACTIVE_WINDOW_MS = 20 * 60 * 1000; // 20 minutos de actividad máxima
   const POLL_INTERVAL_MS = 60 * 1000; // Evalúa cada minuto
   const processedInSession = new Set();
 
   const targetFilter = process.env.TARGET_USER_INPUT || 'all';
   const isManualRun = targetFilter !== 'all';
 
+  const initialTimeContext = getLocalTime();
+  console.log(`[ZONA HORARIA] Los Mochis, Sinaloa (${initialTimeContext.timezone})`);
+  console.log(`[HORA INICIAL] ${initialTimeContext.currentTime} [${initialTimeContext.dayKey.toUpperCase()}]`);
+
+  // 1. Una sola lectura a Firestore para todos los docentes (Ahorro de lecturas)
+  const allUsers = await fetchActiveUsersFromFirebase(db);
+
+  if (allUsers.length === 0) {
+    console.log("=================================================");
+    console.log("⚠️ AVISO: No hay docentes en la colección 'uad_users'.");
+    console.log("Para sincronizar docentes:");
+    console.log("1. Abre la aplicación web > pestaña 'Vinculación Firebase'");
+    console.log("2. Haz clic en 'Subir Docentes Locales a Firestore'");
+    console.log("=================================================");
+    return;
+  }
+
+  // 2. Si no es ejecución manual de prueba, aplicar SMART EARLY-EXIT
+  if (!isManualRun) {
+    const analysis = analyzeUpcomingSchedule(allUsers, initialTimeContext, 20);
+
+    if (!analysis.hasUpcomingInWindow) {
+      console.log("\n=================================================");
+      console.log("⚡ SMART EARLY-EXIT: OPTIMIZACIÓN DE RECURSOS");
+      console.log("=================================================");
+      console.log(`[INFO] Se analizaron ${allUsers.length} docentes activos para el día ${initialTimeContext.dayKey.toUpperCase()}.`);
+      console.log(`[INFO] Ningún docente tiene programada checada en la ventana de los próximos 20 minutos (${initialTimeContext.currentTime} -> ${initialTimeContext.currentTime.slice(0, 2)}:59).`);
+      
+      if (analysis.nextCheckToday) {
+        console.log(`[PRÓXIMA CHECADA HOY] Docente: ${analysis.nextCheckToday.userName} (${analysis.nextCheckToday.username}) a las ${analysis.nextCheckToday.time} (en ~${analysis.nextCheckToday.minutesDiff} min).`);
+      } else {
+        console.log(`[INFO] No hay más checadas programadas para ningún docente en lo que resta del día de hoy.`);
+      }
+
+      console.log(`[✓ AHORRO EXITOSO] Finalizando worker de inmediato (<3s) para evitar consumo de minutos en GitHub Actions y cuotas de Firestore.`);
+      console.log("=================================================\n");
+      return;
+    }
+
+    console.log("\n[⚡ PROGRAMACIÓN DETECTADA] Checadas requeridas en esta ventana de 20 min:");
+    analysis.scheduledInWindow.forEach(item => {
+      console.log(`  • ${item.userName} (${item.username}) -> Horario: ${item.time}`);
+    });
+  }
+
   let cycle = 1;
 
   do {
     const timeContext = getLocalTime();
-    console.log(`\n--- CICLO #${cycle} | Los Mochis, Sinaloa (${timeContext.timezone}) | Hora: ${timeContext.currentTime} [${timeContext.dayKey.toUpperCase()}] ---`);
-
-    const allUsers = await fetchActiveUsersFromFirebase(db);
-
-    if (allUsers.length === 0) {
-      console.log("=================================================");
-      console.log("⚠️ AVISO: No hay docentes en la colección 'uad_users'.");
-      console.log("Para sincronizar docentes:");
-      console.log("1. Abre la aplicación web > pestaña 'Vinculación Firebase'");
-      console.log("2. Haz clic en 'Subir Docentes Locales a Firestore'");
-      console.log("=================================================");
-      break;
-    }
+    console.log(`\n--- CICLO #${cycle} | Hora actual: ${timeContext.currentTime} [${timeContext.dayKey.toUpperCase()}] ---`);
 
     let executedInCycle = 0;
 
@@ -351,7 +433,7 @@ export async function main() {
       const schedule = user.weeklySchedule || {};
       const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
 
-      // Comprobar si el usuario ya checó exitosamente en este bloque de 20 minutos
+      // Comprobar si el usuario ya checó exitosamente en este bloque
       const userBlockKey = `${user.id}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`;
       if (!isManualRun && processedInSession.has(userBlockKey)) {
         continue;
@@ -377,14 +459,13 @@ export async function main() {
     }
 
     if (isManualRun) {
-      // Las ejecuciones manuales de prueba solo corren un ciclo inmediato
       break;
     }
 
     const elapsed = Date.now() - startTime;
     if (elapsed + POLL_INTERVAL_MS < MAX_ACTIVE_WINDOW_MS) {
       const remainingSecs = Math.round((MAX_ACTIVE_WINDOW_MS - elapsed) / 1000);
-      console.log(`[VENTANA ACTIVA] Esperando 60s antes del siguiente ciclo de chequeo... (Tiempo restante: ${remainingSecs}s)`);
+      console.log(`[VENTANA ACTIVA] Esperando 60s antes del siguiente ciclo... (Tiempo restante: ${remainingSecs}s)`);
       await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
       cycle++;
     } else {
@@ -394,7 +475,7 @@ export async function main() {
   } while (Date.now() - startTime < MAX_ACTIVE_WINDOW_MS);
 
   console.log("\n=================================================");
-  console.log(`  VENTANA DE 20 MINUTOS FINALIZADA CON ÉXITO`);
+  console.log(`  VENTANA DE ACTIVIDAD FINALIZADA CON ÉXITO`);
   console.log("=================================================");
 }
 
