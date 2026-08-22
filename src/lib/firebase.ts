@@ -108,7 +108,13 @@ export async function syncUsersToFirestore(db: Firestore, users: UserCredential[
   const batch = writeBatch(db);
   for (const user of users) {
     const ref = doc(db, FB_COLLECTIONS.USERS, user.id);
-    batch.set(ref, user, { merge: true });
+    const cleanPwd = user.password || user.passwordEncrypted || '';
+    const payload: UserCredential = {
+      ...user,
+      password: cleanPwd,
+      passwordEncrypted: cleanPwd
+    };
+    batch.set(ref, payload, { merge: true });
   }
   await batch.commit();
 }
@@ -134,7 +140,13 @@ export async function fetchJobsFromFirestore(db: Firestore): Promise<AutomationJ
 
 export async function saveUserToFirestore(db: Firestore, user: UserCredential) {
   const ref = doc(db, FB_COLLECTIONS.USERS, user.id);
-  await setDoc(ref, user, { merge: true });
+  const cleanPwd = user.password || user.passwordEncrypted || '';
+  const payload: UserCredential = {
+    ...user,
+    password: cleanPwd,
+    passwordEncrypted: cleanPwd
+  };
+  await setDoc(ref, payload, { merge: true });
 }
 
 export async function deleteUserFromFirestore(db: Firestore, userId: string) {

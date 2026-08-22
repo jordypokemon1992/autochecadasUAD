@@ -75,6 +75,7 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
   const [formEmail, setFormEmail] = useState('');
   const [formUsername, setFormUsername] = useState('');
   const [formPassword, setFormPassword] = useState('');
+  const [showModalPassword, setShowModalPassword] = useState(false);
   const [formRoleTag, setFormRoleTag] = useState('Docente Titular');
   const [formNotes, setFormNotes] = useState('');
   const [formActive, setFormActive] = useState(true);
@@ -91,6 +92,7 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
     setFormEmail('');
     setFormUsername('');
     setFormPassword('');
+    setShowModalPassword(false);
     setFormRoleTag('Docente Titular');
     setFormNotes('Horario con horas variables por día');
     setFormActive(true);
@@ -114,7 +116,10 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
     setFormName(user.name);
     setFormEmail(user.email);
     setFormUsername(user.username);
-    setFormPassword(''); // leave blank if unchanged
+    // Populate clean password if it is not a raw hash
+    const cleanPwd = user.password || (user.passwordEncrypted && !user.passwordEncrypted.startsWith('enc_aes256_') ? user.passwordEncrypted : '');
+    setFormPassword(cleanPwd);
+    setShowModalPassword(false);
     setFormRoleTag(user.roleTag);
     setFormNotes(user.notes || '');
     setFormActive(user.active);
@@ -777,16 +782,27 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-300 font-medium mb-1">
-                      {editingUserId ? 'Nueva Contraseña (Opcional)' : 'Contraseña del Portal'}
+                    <label className="block text-slate-300 font-medium mb-1 flex items-center justify-between">
+                      <span>{editingUserId ? 'Contraseña del Portal' : 'Contraseña del Portal'}</span>
+                      <span className="text-[10px] text-cyan-400 font-normal">Requerida para el Checador</span>
                     </label>
-                    <input
-                      type="password"
-                      value={formPassword}
-                      onChange={(e) => setFormPassword(e.target.value)}
-                      placeholder={editingUserId ? 'Dejar en blanco para no cambiar' : '••••••••••••'}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500 font-mono text-xs"
-                    />
+                    <div className="relative">
+                      <input
+                        type={showModalPassword ? "text" : "password"}
+                        value={formPassword}
+                        onChange={(e) => setFormPassword(e.target.value)}
+                        placeholder="Contraseña del portal UAD"
+                        className="w-full px-3 py-2 pr-9 bg-slate-950 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-hidden focus:border-cyan-500 font-mono text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowModalPassword(!showModalPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 cursor-pointer p-0.5"
+                        title={showModalPassword ? "Ocultar contraseña" : "Ver contraseña"}
+                      >
+                        {showModalPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5 text-cyan-400" />}
+                      </button>
+                    </div>
                   </div>
                 </div>
 

@@ -818,8 +818,8 @@ app.put("/api/users/:id", (req, res) => {
 
   const { name, email, username, password, roleTag, notes, active, weeklySchedule, scheduledTimes, activeDays } = req.body;
   if (password) {
-    const hash = crypto.createHash("sha256").update(password).digest("hex").slice(0, 16);
-    existing.passwordEncrypted = `enc_aes256_${hash}`;
+    existing.password = password;
+    existing.passwordEncrypted = password;
   }
 
   if (name !== undefined) existing.name = name;

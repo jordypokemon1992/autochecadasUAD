@@ -144,10 +144,14 @@ export async function executeAttendanceCheck(db, user, timeContext) {
     await dismissModals();
 
     // 2. Inyectar credenciales con selectores exactos
+    const pwdToUse = user.password || user.passwordEncrypted || "";
+    if (pwdToUse.startsWith("enc_aes256_")) {
+      console.warn(`[⚠️ ALERTA CREDENCIAL] La contraseña de ${user.username} contiene un hash previo ("${pwdToUse.slice(0, 16)}..."). Actualiza la contraseña en la Bóveda y resincroniza con Firebase.`);
+    }
     console.log(`[2/5] Ingresando matrícula en #user y contraseña en #pass...`);
     await page.waitForSelector("#user, input[name='_usuario_']", { timeout: 15000 });
     await page.fill("#user, input[name='_usuario_']", user.username);
-    await page.fill("#pass, input[name='_pass_']", user.password || user.passwordEncrypted || "");
+    await page.fill("#pass, input[name='_pass_']", pwdToUse);
 
     // 3. Enviar login con #boton (icono fa-paw)
     console.log(`[3/5] Enviando login mediante #boton...`);
