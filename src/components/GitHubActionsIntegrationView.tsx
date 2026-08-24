@@ -458,6 +458,7 @@ export async function main() {
       const schedule = user.weeklySchedule || {};
       const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
 
+      // Clave única por docente, día y hora programada (ej. 0705110361_mon_12)
       const userBlockKey = \`\${user.id}_\${timeContext.dayKey}_\${timeContext.currentTime.slice(0, 2)}\`;
       if (!isManualRun && processedInSession.has(userBlockKey)) {
         continue;
@@ -482,6 +483,26 @@ export async function main() {
     }
 
     if (isManualRun) break;
+
+    // ⚡ OPTIMIZACIÓN: EARLY-EXIT POST-EJECUCIÓN
+    // Verificar si todas las checadas requeridas en esta ventana ya fueron completadas
+    const pendingTasks = analysis.scheduledInWindow.filter(task => {
+      const userBlockHour = task.time.slice(0, 2);
+      const key = \`\${task.userId}_\${initialTimeContext.dayKey}_\${userBlockHour}\`;
+      return !processedInSession.has(key);
+    });
+
+    if (pendingTasks.length === 0) {
+      console.log("\\n=================================================");
+      console.log("⚡ CIERRE ANTICIPADO EXITOSO (EARLY-EXIT POST-EJECUCIÓN)");
+      console.log("=================================================");
+      console.log(\`[✓ COMPLETO] Todas las checadas programadas (\${analysis.scheduledInWindow.length}/\${analysis.scheduledInWindow.length}) en esta ventana fueron procesadas con éxito.\`);
+      console.log("[✓ OPTIMIZACIÓN MÁXIMA] Finalizando worker de inmediato para liberar el runner y evitar consultas/esperas ociosas.");
+      console.log("=================================================\\n");
+      break;
+    } else {
+      console.log(\`[PENDIENTES] Quedan \${pendingTasks.length} checadas por ejecutar en esta ventana (\${pendingTasks.map(p => \`\${p.username} @ \${p.time}\`).join(', ')}).\`);
+    }
 
     const elapsed = Date.now() - startTime;
     if (elapsed + POLL_INTERVAL_MS < MAX_ACTIVE_WINDOW_MS) {
