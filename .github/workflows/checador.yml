@@ -1,14 +1,7 @@
 name: UAD Automation Runner (Firebase Driven)
 
 on:
-  schedule:
-    # Se ejecuta a los 45 minutos de cada hora:
-    # 06:45 AM hasta 21:45 PM (Los Mochis, Sinaloa / UTC-7)
-    # 06:45 MST = 13:45 UTC ... 21:45 MST = 04:45 UTC del día siguiente
-    # Lunes a Viernes
-    - cron: '45 13-23 * * 1-5'
-    - cron: '45 0-4 * * 2-6'
-  workflow_dispatch: # Permite disparar manualmente o vía API externa (cron-job.org) en cualquier momento
+  workflow_dispatch: # Disparo exacto y prioritario vía Cron-Job.org / Webhook o manual
     inputs:
       target_user_id:
         description: 'Matrícula o ID específico de docente (opcional, deja "all" para todos)'
