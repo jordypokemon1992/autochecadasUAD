@@ -317,6 +317,12 @@ export function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) 
   const upcomingToday = [];
 
   for (const user of users) {
+    if (user.active === false) continue;
+    // Si el día actual está pausado para este docente, omitir
+    if ((user.pausedDays || []).includes(timeContext.dayKey)) {
+      continue;
+    }
+
     const schedule = user.weeklySchedule || {};
     const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
 
@@ -325,10 +331,13 @@ export function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) 
       const [th, tm] = timeStr.split(':').map(Number);
       const totalMin = th * 60 + tm;
 
+      const taskKey = `${user.id || user.username}_${timeContext.dayKey}_${timeStr}`;
+
       // Dentro de la ventana de los próximos 20 minutos (margen +-10 min)
       if (totalMin >= (currentTotalMin - 10) && totalMin <= (windowEndMin + 10)) {
         scheduledInWindow.push({
-          userId: user.id,
+          taskKey,
+          userId: user.id || user.username,
           userName: user.name || user.username,
           username: user.username,
           time: timeStr,
@@ -338,7 +347,8 @@ export function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) 
 
       if (totalMin >= (currentTotalMin - 10)) {
         upcomingToday.push({
-          userId: user.id,
+          taskKey,
+          userId: user.id || user.username,
           userName: user.name || user.username,
           username: user.username,
           time: timeStr,
@@ -367,7 +377,7 @@ export async function main() {
   const startTime = Date.now();
   const MAX_ACTIVE_WINDOW_MS = 20 * 60 * 1000; // 20 minutos de actividad máxima
   const POLL_INTERVAL_MS = 60 * 1000; // Evalúa cada minuto
-  const processedInSession = new Set();
+  const processedTaskKeys = new Set();
 
   const targetFilter = process.env.TARGET_USER_INPUT || 'all';
   const isManualRun = targetFilter !== 'all';
@@ -383,15 +393,17 @@ export async function main() {
     console.log("=================================================");
     console.log("⚠️ AVISO: No hay docentes en la colección 'uad_users'.");
     console.log("Para sincronizar docentes:");
-    console.log("1. Abre la aplicación web > pestaña 'Vinculación Firebase'");
+    console.log("1. Abre la aplicación web > pestaña 'Configuración General'");
     console.log("2. Haz clic en 'Subir Docentes Locales a Firestore'");
     console.log("=================================================");
     return;
   }
 
-  // 2. Si no es ejecución manual de prueba, aplicar SMART EARLY-EXIT
+  // 2. Si no es ejecución manual de prueba, aplicar SMART EARLY-EXIT inicial
+  let scheduledInWindow = [];
   if (!isManualRun) {
     const analysis = analyzeUpcomingSchedule(allUsers, initialTimeContext, 20);
+    scheduledInWindow = analysis.scheduledInWindow;
 
     if (!analysis.hasUpcomingInWindow) {
       console.log("\n=================================================");
@@ -412,7 +424,7 @@ export async function main() {
     }
 
     console.log("\n[⚡ PROGRAMACIÓN DETECTADA] Checadas requeridas en esta ventana de 20 min:");
-    analysis.scheduledInWindow.forEach(item => {
+    scheduledInWindow.forEach(item => {
       console.log(`  • ${item.userName} (${item.username}) -> Horario: ${item.time}`);
     });
   }
@@ -423,24 +435,20 @@ export async function main() {
     const timeContext = getLocalTime();
     console.log(`\n--- CICLO #${cycle} | Hora actual: ${timeContext.currentTime} [${timeContext.dayKey.toUpperCase()}] ---`);
 
-    let executedInCycle = 0;
-
     for (const user of allUsers) {
       if (targetFilter !== 'all' && user.id !== targetFilter && user.username !== targetFilter) {
+        continue;
+      }
+
+      if (!isManualRun && (user.pausedDays || []).includes(timeContext.dayKey)) {
         continue;
       }
 
       const schedule = user.weeklySchedule || {};
       const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
 
-      // Comprobar si el usuario ya checó exitosamente en este bloque
-      const userBlockKey = `${user.id}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`;
-      if (!isManualRun && processedInSession.has(userBlockKey)) {
-        continue;
-      }
-
-      // Debe ejecutarse si es manual o si la hora actual coincide con su horario (margen ±10 min)
-      const shouldRunNow = isManualRun || dayTimes.some(t => {
+      // Detectar si algún horario coincide con el margen actual
+      const matchingTimes = dayTimes.filter(t => {
         const [th, tm] = t.split(':').map(Number);
         const [ch, cm] = timeContext.currentTime.split(':').map(Number);
         const targetMin = th * 60 + tm;
@@ -448,10 +456,26 @@ export async function main() {
         return Math.abs(currentMin - targetMin) <= 10;
       });
 
+      const unexecutedMatchingTimes = matchingTimes.filter(t => {
+        const key = `${user.id || user.username}_${timeContext.dayKey}_${t}`;
+        return !processedTaskKeys.has(key);
+      });
+
+      const shouldRunNow = isManualRun || unexecutedMatchingTimes.length > 0;
+
       if (shouldRunNow) {
-        executedInCycle++;
         await executeAttendanceCheck(db, user, timeContext);
-        processedInSession.add(userBlockKey);
+
+        if (matchingTimes.length > 0) {
+          matchingTimes.forEach(t => {
+            const key = `${user.id || user.username}_${timeContext.dayKey}_${t}`;
+            processedTaskKeys.add(key);
+          });
+        } else {
+          const fallbackKey = `${user.id || user.username}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`;
+          processedTaskKeys.add(fallbackKey);
+        }
+
         await new Promise(r => setTimeout(r, 2000));
       } else {
         console.log(`[EN ESPERA] ${user.name || user.username} (${user.username}) sin horario en este minuto ${timeContext.currentTime} (Horarios día: ${dayTimes.join(', ') || 'Ninguno'}).`);
@@ -460,6 +484,22 @@ export async function main() {
 
     if (isManualRun) {
       break;
+    }
+
+    // ⚡ OPTIMIZACIÓN: EARLY-EXIT POST-EJECUCIÓN
+    // Si todas las checadas programadas en la ventana ya fueron procesadas, terminar de inmediato
+    const pendingTasks = scheduledInWindow.filter(task => !processedTaskKeys.has(task.taskKey));
+
+    if (pendingTasks.length === 0 && scheduledInWindow.length > 0) {
+      console.log("\n=================================================");
+      console.log("⚡ CIERRE ANTICIPADO EXITOSO (EARLY-EXIT POST-EJECUCIÓN)");
+      console.log("=================================================");
+      console.log(`[✓ COMPLETO] Todas las checadas programadas (${scheduledInWindow.length}/${scheduledInWindow.length}) en esta ventana fueron procesadas con éxito.`);
+      console.log("[✓ OPTIMIZACIÓN MÁXIMA] Finalizando worker de inmediato para liberar el runner y evitar consultas/esperas ociosas.");
+      console.log("=================================================\n");
+      break;
+    } else if (pendingTasks.length > 0) {
+      console.log(`[PENDIENTES] Quedan ${pendingTasks.length} checadas por ejecutar en esta ventana (${pendingTasks.map(p => `${p.userName} @ ${p.time}`).join(', ')}).`);
     }
 
     const elapsed = Date.now() - startTime;

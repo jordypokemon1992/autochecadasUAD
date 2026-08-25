@@ -53,94 +53,22 @@ function persistExecutionsToDisk() {
   }
 }
 
-// Seed initial users with independent weekly schedules per day
-const seedUsers: UserCredential[] = [
-  {
-    id: "usr_01",
-    name: "Dr. Luis Guillermo Solano",
-    email: "lsolano@institucion.edu",
-    username: "0705110713",
-    passwordEncrypted: "enc_aes256_98fa72bc910a",
-    roleTag: "Docente Neurología",
-    active: true,
-    weeklySchedule: {
-      mon: ["08:00", "09:45", "12:45"],
-      tue: ["07:00", "08:45", "13:45", "16:45"],
-      wed: ["08:00", "12:45", "14:45"],
-      thu: ["09:45", "13:45", "16:45"],
-      fri: ["08:00", "09:45", "12:45", "13:45", "14:45", "16:45"],
-      sat: [],
-      sun: []
-    },
-    scheduledTimes: ["08:00", "09:45", "12:45", "13:45", "14:45", "16:45"],
-    activeDays: ["mon", "tue", "wed", "thu", "fri"],
-    notes: "Horarios independientes variables por día (Matrícula: 0705110713)",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
-    lastRunAt: new Date(Date.now() - 1000 * 60 * 60 * 8).toISOString(),
-    lastStatus: "success",
-  },
-  {
-    id: "usr_02",
-    name: "Mtra. Elena Gómez",
-    email: "egomez@institucion.edu",
-    username: "0705110842",
-    passwordEncrypted: "enc_aes256_b34c8901ddfa",
-    roleTag: "Coordinadora Académica",
-    active: true,
-    weeklySchedule: {
-      mon: ["14:00", "16:00"],
-      tue: ["14:00", "16:00", "18:00", "20:00"],
-      wed: ["12:00", "14:00", "18:00"],
-      thu: ["14:00", "16:00", "18:00", "20:00"],
-      fri: ["10:00", "12:00", "14:00"],
-      sat: [],
-      sun: []
-    },
-    scheduledTimes: ["14:00", "16:00", "18:00", "20:00"],
-    activeDays: ["mon", "tue", "wed", "thu", "fri"],
-    notes: "Horario Vespertino con variación diaria",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 8).toISOString(),
-    lastRunAt: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
-    lastStatus: "success",
-  },
-  {
-    id: "usr_03",
-    name: "Dr. Carlos Valenzuela",
-    email: "cvalenzuela@institucion.edu",
-    username: "0705110915",
-    passwordEncrypted: "enc_aes256_56ef1209ac44",
-    roleTag: "Docente Titular",
-    active: true,
-    weeklySchedule: {
-      mon: [],
-      tue: ["07:00", "11:00", "13:00", "15:00"],
-      wed: [],
-      thu: ["08:00", "10:00", "14:00"],
-      fri: ["07:00", "11:00"],
-      sat: [],
-      sun: []
-    },
-    scheduledTimes: ["07:00", "11:00", "13:00", "15:00"],
-    activeDays: ["tue", "thu", "fri"],
-    notes: "Días Martes, Jueves y Viernes con horas independientes",
-    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 4).toISOString(),
-    lastRunAt: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(),
-    lastStatus: "pending",
-  }
-];
-
-// Load data from disk on startup if present, otherwise populate seeds
+// Load data from disk on startup if present (without injecting mock users)
 try {
   if (fs.existsSync(USERS_FILE)) {
     const raw = fs.readFileSync(USERS_FILE, "utf-8");
     const parsed: UserCredential[] = JSON.parse(raw);
     const seenByUsername = new Map<string, UserCredential>();
     parsed.forEach(u => {
+      // Ignore legacy mock demo seed users if present
+      if (u.id === "usr_01" && u.name.includes("Solano") && !u.password) return;
+      if (u.id === "usr_02" && u.name.includes("Elena") && !u.password) return;
+      if (u.id === "usr_03" && u.name.includes("Valenzuela") && !u.password) return;
+
       const key = u.username ? u.username.trim() : u.id;
       if (!seenByUsername.has(key)) {
         seenByUsername.set(key, u);
       } else {
-        // Merge in case of duplicates
         const existing = seenByUsername.get(key)!;
         seenByUsername.set(key, {
           ...existing,
@@ -153,14 +81,10 @@ try {
       }
     });
     seenByUsername.forEach(u => usersDb.set(u.id, u));
-    console.log(`[STORAGE] Loaded and deduplicated ${usersDb.size} users from disk.`);
-  } else {
-    seedUsers.forEach(u => usersDb.set(u.id, u));
-    persistUsersToDisk();
+    console.log(`[STORAGE] Loaded ${usersDb.size} real users from disk.`);
   }
 } catch (e) {
-  console.error("[STORAGE] Error reading users from disk, using seeds:", e);
-  seedUsers.forEach(u => usersDb.set(u.id, u));
+  console.error("[STORAGE] Error reading users from disk:", e);
 }
 
 // Seed initial default job configured specifically for UAD Portal and "Checar" button
@@ -294,24 +218,23 @@ const seedExecutions: ExecutionRecord[] = [
   }
 ];
 
-// Bootstrap Store from Disk (or fallback to Seed if first run)
+// Bootstrap Store from Disk (or empty initial state)
 if (fs.existsSync(USERS_FILE)) {
   try {
     const raw = fs.readFileSync(USERS_FILE, "utf-8");
     const parsed: UserCredential[] = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      parsed.forEach(u => usersDb.set(u.id, u));
+      parsed.forEach(u => {
+        if (u.id === "usr_01" && u.name.includes("Solano") && !u.password) return;
+        if (u.id === "usr_02" && u.name.includes("Elena") && !u.password) return;
+        if (u.id === "usr_03" && u.name.includes("Valenzuela") && !u.password) return;
+        usersDb.set(u.id, u);
+      });
       console.log(`[STORAGE] ${usersDb.size} usuarios cargados exitosamente de ${USERS_FILE}`);
     }
   } catch (e) {
     console.error("[STORAGE] Error leyendo vault_users.json:", e);
   }
-}
-
-if (usersDb.size === 0) {
-  seedUsers.forEach(u => usersDb.set(u.id, u));
-  persistUsersToDisk();
-  console.log(`[STORAGE] Bóveda inicializada con seed inicial (${usersDb.size} usuarios guardados permanentemente en disco)`);
 }
 
 if (fs.existsSync(JOBS_FILE)) {
@@ -401,6 +324,9 @@ function computeUpcomingDispatches(): UpcomingUserDispatch[] {
     const daysList: DayOfWeek[] = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 
     for (const d of daysList) {
+      // Si el día está apagado en la tarjeta del docente (pausedDays), omitir
+      if ((user.pausedDays || []).includes(d)) continue;
+
       const times = schedule[d] || [];
       const dayIdx = DAY_INDEX_MAP[d];
 
@@ -549,6 +475,9 @@ setInterval(() => {
 
   for (const user of usersDb.values()) {
     if (!user.active) continue;
+    // Si el día actual de la semana está apagado para este usuario, omitir
+    if ((user.pausedDays || []).includes(currentDayKey)) continue;
+
     const schedule = user.weeklySchedule || {};
     const userTimesToday = schedule[currentDayKey] || [];
 

@@ -23,9 +23,20 @@ import {
   ChevronUp,
   Sliders,
   HardDrive,
-  Database
+  Database,
+  Cloud,
+  RefreshCw,
+  ArrowRightLeft,
+  AlertTriangle,
+  CheckCircle2
 } from 'lucide-react';
 import { UserCredential, DayOfWeek, WeeklyDaySchedule } from '../types';
+import { 
+  getSavedFirebaseConfig, 
+  initFirebase, 
+  syncUsersToFirestore, 
+  fetchUsersFromFirestore 
+} from '../lib/firebase';
 
 interface UsersVaultViewProps {
   users: UserCredential[];
@@ -34,6 +45,7 @@ interface UsersVaultViewProps {
   onDeleteUser: (id: string) => Promise<void>;
   onTriggerRun: (jobId: string, userId: string) => void;
   isExecuting: boolean;
+  onRefreshData?: () => Promise<void>;
 }
 
 const ALL_DAYS: { id: DayOfWeek; label: string; short: string; full: string }[] = [
@@ -63,12 +75,110 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
   onDeleteUser,
   onTriggerRun,
   isExecuting,
+  onRefreshData,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
   const [dayFilter, setDayFilter] = useState<'all' | DayOfWeek>('all');
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
+  const [toggleDayLoadingUser, setToggleDayLoadingUser] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
+  const [syncMessage, setSyncMessage] = useState<string>('');
+
+  // Firebase Push & Pull handlers duplicated in Vault
+  const handlePushToFirebase = async () => {
+    const saved = getSavedFirebaseConfig();
+    if (!saved || !saved.apiKey || !saved.projectId) {
+      setSyncStatus('error');
+      setSyncMessage('Configuración de Firebase no encontrada. Ve a la pestaña Configuración General (Vinculación Firebase) para conectar tu proyecto.');
+      return;
+    }
+
+    setSyncStatus('syncing');
+    setSyncMessage('Subiendo docentes y horarios locales hacia Firestore...');
+    try {
+      const { db } = initFirebase(saved);
+      await syncUsersToFirestore(db, users);
+      setSyncStatus('success');
+      setSyncMessage(`¡Sincronización exitosa! ${users.length} docentes subidos a Firestore.`);
+      setTimeout(() => {
+        setSyncStatus('idle');
+        setSyncMessage('');
+      }, 5000);
+    } catch (err: any) {
+      console.error('Error al subir a Firestore:', err);
+      setSyncStatus('error');
+      setSyncMessage(`Error al subir a Firestore: ${err.message || 'Error desconocido'}`);
+    }
+  };
+
+  const handlePullFromFirebase = async () => {
+    const saved = getSavedFirebaseConfig();
+    if (!saved || !saved.apiKey || !saved.projectId) {
+      setSyncStatus('error');
+      setSyncMessage('Configuración de Firebase no encontrada. Ve a la pestaña Configuración General (Vinculación Firebase) para conectar tu proyecto.');
+      return;
+    }
+
+    setSyncStatus('syncing');
+    setSyncMessage('Descargando docentes desde Firestore...');
+    try {
+      const { db } = initFirebase(saved);
+      const remoteUsers = await fetchUsersFromFirestore(db);
+
+      const res = await fetch('/api/users/sync-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ users: remoteUsers, mode: 'merge' })
+      });
+
+      if (!res.ok) {
+        throw new Error('Error al sincronizar en el servidor local.');
+      }
+
+      if (onRefreshData) {
+        await onRefreshData();
+      }
+
+      setSyncStatus('success');
+      setSyncMessage(`¡Descarga completada! ${remoteUsers.length} docentes sincronizados desde Firestore.`);
+      setTimeout(() => {
+        setSyncStatus('idle');
+        setSyncMessage('');
+      }, 5000);
+    } catch (err: any) {
+      console.error('Error al descargar de Firestore:', err);
+      setSyncStatus('error');
+      setSyncMessage(`Error al descargar de Firestore: ${err.message || 'Error desconocido'}`);
+    }
+  };
+
+  // Toggle day active/inactive (ON / OFF) directly from teacher card
+  const handleToggleDayForUser = async (user: UserCredential, day: DayOfWeek) => {
+    setToggleDayLoadingUser(`${user.id}_${day}`);
+    try {
+      const paused = user.pausedDays || [];
+      const isCurrentlyPaused = paused.includes(day);
+
+      let newPausedDays: DayOfWeek[];
+      if (isCurrentlyPaused) {
+        // Turn ON -> remove from pausedDays
+        newPausedDays = paused.filter(d => d !== day);
+      } else {
+        // Turn OFF -> add to pausedDays
+        newPausedDays = [...paused, day];
+      }
+
+      await onUpdateUser(user.id, {
+        pausedDays: newPausedDays
+      });
+    } catch (err) {
+      console.error('Error toggling day state:', err);
+    } finally {
+      setToggleDayLoadingUser(null);
+    }
+  };
 
   // Form State
   const [formName, setFormName] = useState('');
@@ -375,12 +485,12 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
               Horario Diario Variable
             </span>
             <span className="px-2 py-0.5 text-[11px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-800/80 rounded flex items-center gap-1">
-              <HardDrive className="w-3 h-3 text-emerald-400" />
-              <span>Persistencia 24/7 en Disco Activa</span>
+              <Database className="w-3 h-3 text-emerald-400" />
+              <span>Firebase Realtime Cloud Sync</span>
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1 max-w-3xl">
-            Cada usuario puede tener horas de checado totalmente diferentes en cada día de la semana (por ejemplo: <span className="text-cyan-300 font-semibold">Lunes 8:00, 9:45, 12:45</span>; <span className="text-emerald-300 font-semibold">Martes 7:00, 11:00, 13:45</span>; <span className="text-purple-300 font-semibold">Miércoles 8:00, 14:45</span>, etc.).
+            Sincronización en vivo con Firebase Firestore (<code className="text-cyan-300 font-mono text-[11px]">uad_users</code>). Cualquier cambio de docentes u horarios se refleja en tiempo real sin docentes de prueba.
           </p>
         </div>
 
@@ -407,6 +517,63 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
         </div>
       </div>
 
+      {/* Horizontal Firebase Synchronization Actions Toolbar */}
+      <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
+          <div className="flex items-center gap-2">
+            <ArrowRightLeft className="w-4 h-4 text-cyan-400" />
+            <span className="font-semibold text-white">Acciones de Sincronización</span>
+          </div>
+          <span className="text-[11px] text-slate-400">
+            Transfiere tus docentes configurados y horarios entre el almacenamiento local persistente y tu nube Firestore
+          </span>
+        </div>
+
+        <div className="flex flex-col sm:flex-row items-center gap-3">
+          <button
+            id="btn-vault-push-firestore"
+            type="button"
+            onClick={handlePushToFirebase}
+            disabled={syncStatus === 'syncing'}
+            className="w-full sm:w-auto flex-1 py-2.5 px-4 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-500 hover:to-amber-500 text-white shadow-sm transition-all cursor-pointer disabled:opacity-50"
+          >
+            <Cloud className="w-4 h-4 shrink-0" />
+            <span>Subir Docentes Locales a Firestore ({users.length})</span>
+          </button>
+
+          <button
+            id="btn-vault-pull-firestore"
+            type="button"
+            onClick={handlePullFromFirebase}
+            disabled={syncStatus === 'syncing'}
+            className="w-full sm:w-auto flex-1 py-2.5 px-4 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 hover:border-cyan-500/60 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-4 h-4 shrink-0 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+            <span>Descargar Docentes desde Firestore</span>
+          </button>
+        </div>
+
+        {/* Sync status notification alert */}
+        {syncMessage && (
+          <div className={`p-2.5 rounded-lg text-xs flex items-center gap-2 ${
+            syncStatus === 'success'
+              ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
+              : syncStatus === 'error'
+              ? 'bg-rose-950/80 text-rose-300 border border-rose-800'
+              : 'bg-cyan-950/80 text-cyan-300 border border-cyan-800'
+          }`}>
+            {syncStatus === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            ) : syncStatus === 'error' ? (
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+            ) : (
+              <RefreshCw className="w-4 h-4 text-cyan-400 shrink-0 animate-spin" />
+            )}
+            <span>{syncMessage}</span>
+          </div>
+        )}
+      </div>
+
       {/* Dedup feedback alert */}
       {dedupMessage && (
         <div className="bg-emerald-950/80 border border-emerald-800 p-3 rounded-xl flex items-center gap-2.5 text-xs text-emerald-300">
@@ -414,32 +581,6 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
           <span>{dedupMessage}</span>
         </div>
       )}
-
-      {/* 24/7 Persistence Policy & Security Guarantee */}
-      <div className="bg-slate-900/60 border border-emerald-500/30 p-3.5 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-emerald-950 border border-emerald-600/50 flex items-center justify-center shrink-0">
-            <Database className="w-4 h-4 text-emerald-400" />
-          </div>
-          <div>
-            <div className="text-slate-200 font-semibold flex items-center gap-1.5">
-              <span>Garantía de Persistencia No Volátil 24/7</span>
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              La bóveda de credenciales y la matriz de horarios están aseguradas en almacenamiento en disco (<code className="font-mono text-emerald-300">data/vault_users.json</code>). <strong className="text-slate-200">Los datos nunca se eliminan automáticamente ni tras reinicios</strong>; únicamente se eliminan si se presiona de forma explícita el botón manual de borrar.
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-          <span className="px-2.5 py-1 bg-slate-950 border border-slate-800 rounded-md text-[11px] text-slate-300 font-mono">
-            Auto-Sync: ON
-          </span>
-          <span className="px-2.5 py-1 bg-emerald-950/60 border border-emerald-800/80 rounded-md text-[11px] text-emerald-300 font-medium">
-            100% Protegido
-          </span>
-        </div>
-      </div>
 
       {/* Day Filter Toolbar & Quick Stats */}
       <div className="bg-slate-900/90 border border-slate-800 p-3.5 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -570,12 +711,17 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
                             }`}>
                               {user.active ? 'ACTIVO' : 'PAUSADO'}
                             </span>
+                            {(user.pausedDays || []).length > 0 && (
+                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800">
+                                {(user.pausedDays || []).length} DÍA(S) EN OFF
+                              </span>
+                            )}
                           </div>
                           <div className="flex items-center gap-3 text-xs text-slate-400 mt-1">
                             <span>{user.email}</span>
                             <span>•</span>
                             <span className="text-cyan-400 font-medium">
-                              {totalUserCheckins} checadas semanales en {activeDays.length} días
+                              {totalUserCheckins} checadas configuradas ({activeDays.filter(d => !(user.pausedDays || []).includes(d)).length} días activos hoy)
                             </span>
                             {user.notes && (
                               <>
@@ -648,16 +794,16 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Independent Weekly Schedule Breakdown Grid */}
+                    {/* Independent Weekly Schedule Breakdown Grid & ON/OFF Controls */}
                     {isExpanded && (
                       <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-800/90 space-y-2">
-                        <div className="flex items-center justify-between text-xs pb-1 border-b border-slate-800/60">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs pb-1 border-b border-slate-800/60">
                           <span className="text-slate-300 font-semibold flex items-center gap-1.5">
                             <Clock className="w-3.5 h-3.5 text-cyan-400" />
-                            <span>Horarios Específicos por Día de la Semana:</span>
+                            <span>Horarios y Estado por Día de la Semana:</span>
                           </span>
                           <span className="text-[11px] text-slate-400">
-                            Disparos automatizados e independientes
+                            Haz clic en el botón <strong className="text-slate-300">ON / OFF</strong> de cualquier día para pausar o reactivar checadas
                           </span>
                         </div>
 
@@ -665,7 +811,9 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
                           {ALL_DAYS.map((day) => {
                             const times = schedule[day.id] || [];
                             const hasTimes = times.length > 0;
+                            const isPaused = (user.pausedDays || []).includes(day.id);
                             const isFilteredDay = dayFilter === day.id;
+                            const isLoading = toggleDayLoadingUser === `${user.id}_${day.id}`;
 
                             return (
                               <div
@@ -673,35 +821,66 @@ export const UsersVaultView: React.FC<UsersVaultViewProps> = ({
                                 className={`p-2.5 rounded-lg border transition-all ${
                                   isFilteredDay
                                     ? 'bg-cyan-950/40 border-cyan-500/60 ring-1 ring-cyan-500/40'
+                                    : isPaused
+                                    ? 'bg-rose-950/20 border-rose-900/40'
                                     : hasTimes
                                     ? 'bg-slate-900/90 border-slate-700/80'
                                     : 'bg-slate-950/40 border-slate-800/40 opacity-60'
                                 }`}
                               >
                                 <div className="flex items-center justify-between mb-1.5">
-                                  <span className={`font-bold text-xs ${hasTimes ? 'text-white' : 'text-slate-500'}`}>
+                                  <span className={`font-bold text-xs ${
+                                    isPaused ? 'text-rose-400' : hasTimes ? 'text-white' : 'text-slate-500'
+                                  }`}>
                                     {day.full}
                                   </span>
-                                  {hasTimes ? (
-                                    <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-cyan-950 text-cyan-300 border border-cyan-800">
-                                      {times.length}
-                                    </span>
-                                  ) : (
-                                    <span className="text-[10px] text-slate-600">Off</span>
+
+                                  {/* Day ON/OFF Toggle Switch */}
+                                  {hasTimes && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleDayForUser(user, day.id)}
+                                      disabled={isLoading}
+                                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors cursor-pointer ${
+                                        isLoading
+                                          ? 'opacity-50 cursor-not-allowed bg-slate-800 text-slate-400 border-slate-700'
+                                          : isPaused
+                                          ? 'bg-rose-950/90 text-rose-300 border-rose-700 hover:bg-rose-900'
+                                          : 'bg-emerald-950/90 text-emerald-300 border-emerald-700 hover:bg-emerald-900'
+                                      }`}
+                                      title={isPaused ? `Activar checadas para ${day.full}` : `Pausar checadas para ${day.full}`}
+                                    >
+                                      {isLoading ? '...' : isPaused ? 'OFF' : 'ON'}
+                                    </button>
+                                  )}
+
+                                  {!hasTimes && (
+                                    <span className="text-[10px] text-slate-600 font-mono">Sin horas</span>
                                   )}
                                 </div>
 
                                 {hasTimes ? (
-                                  <div className="flex flex-wrap gap-1">
-                                    {times.map((t) => (
-                                      <span
-                                        key={t}
-                                        className="inline-flex items-center px-1.5 py-0.5 bg-slate-950 border border-cyan-500/30 text-cyan-200 rounded text-[11px] font-mono font-medium"
-                                        title={formatHourDisplay(t)}
-                                      >
-                                        {t}
-                                      </span>
-                                    ))}
+                                  <div className="space-y-1.5">
+                                    <div className={`flex flex-wrap gap-1 ${isPaused ? 'opacity-40 grayscale' : ''}`}>
+                                      {times.map((t) => (
+                                        <span
+                                          key={t}
+                                          className={`inline-flex items-center px-1.5 py-0.5 border rounded text-[11px] font-mono font-medium ${
+                                            isPaused
+                                              ? 'bg-slate-950/80 border-slate-800 text-slate-500 line-through'
+                                              : 'bg-slate-950 border-cyan-500/30 text-cyan-200'
+                                          }`}
+                                          title={formatHourDisplay(t)}
+                                        >
+                                          {t}
+                                        </span>
+                                      ))}
+                                    </div>
+                                    {isPaused && (
+                                      <p className="text-[10px] text-rose-400 font-medium">
+                                        Pausado este día
+                                      </p>
+                                    )}
                                   </div>
                                 ) : (
                                   <p className="text-[10px] text-slate-600 italic">Sin checado</p>

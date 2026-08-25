@@ -158,3 +158,50 @@ export async function saveJobToFirestore(db: Firestore, job: AutomationJob) {
   const ref = doc(db, FB_COLLECTIONS.JOBS, job.id);
   await setDoc(ref, job, { merge: true });
 }
+
+// Real-time listener for users in Firestore (zero-polling, triggers only on real change)
+export function subscribeToFirestoreUsers(
+  db: Firestore, 
+  onUpdate: (users: UserCredential[]) => void,
+  onError?: (err: Error) => void
+): () => void {
+  const usersRef = collection(db, FB_COLLECTIONS.USERS);
+  const unsubscribe = onSnapshot(usersRef, (snapshot) => {
+    const usersList: UserCredential[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as UserCredential;
+      usersList.push({
+        ...data,
+        id: docSnap.id
+      });
+    });
+    onUpdate(usersList);
+  }, (err) => {
+    console.error('[FIREBASE REALTIME] Error en suscripción de usuarios:', err);
+    if (onError) onError(err);
+  });
+
+  return unsubscribe;
+}
+
+// Real-time listener for executions in Firestore
+export function subscribeToFirestoreExecutions(
+  db: Firestore, 
+  onUpdate: (executions: ExecutionRecord[]) => void,
+  onError?: (err: Error) => void
+): () => void {
+  const execRef = collection(db, FB_COLLECTIONS.EXECUTIONS);
+  const unsubscribe = onSnapshot(execRef, (snapshot) => {
+    const list: ExecutionRecord[] = [];
+    snapshot.forEach((docSnap) => {
+      list.push(docSnap.data() as ExecutionRecord);
+    });
+    list.sort((a, b) => new Date(b.startedAt || b.completedAt || 0).getTime() - new Date(a.startedAt || a.completedAt || 0).getTime());
+    onUpdate(list);
+  }, (err) => {
+    console.error('[FIREBASE REALTIME] Error en suscripción de ejecuciones:', err);
+    if (onError) onError(err);
+  });
+
+  return unsubscribe;
+}

@@ -4,13 +4,10 @@ import {
   ShieldCheck, 
   Clock, 
   Users, 
-  History, 
-  Cloud, 
-  Play, 
   Activity,
-  Layers,
-  Database,
-  Github
+  Settings,
+  LogOut,
+  UserCheck
 } from 'lucide-react';
 import { SystemHealthStatus } from '../types';
 
@@ -20,6 +17,8 @@ interface HeaderProps {
   health: SystemHealthStatus | null;
   onTriggerQuickRun: () => void;
   isExecuting: boolean;
+  currentUser?: string | null;
+  onLogout?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -28,6 +27,8 @@ export const Header: React.FC<HeaderProps> = ({
   health,
   onTriggerQuickRun,
   isExecuting,
+  currentUser,
+  onLogout,
 }) => {
   return (
     <header className="bg-slate-900 border-b border-slate-800 text-slate-100 sticky top-0 z-40">
@@ -41,7 +42,7 @@ export const Header: React.FC<HeaderProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="font-bold text-lg text-white tracking-tight">
-                  CloudFlow <span className="text-cyan-400 font-medium">Orchestrator</span>
+                  Administrador <span className="text-cyan-400 font-medium">Checadas Docentes</span>
                 </h1>
                 <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-950 text-emerald-300 border border-emerald-800/80">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1.5"></span>
@@ -49,52 +50,44 @@ export const Header: React.FC<HeaderProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400 hidden sm:block">
-                Automatización desatendida y programación en la nube
+                Automatización desatendida y control de horarios en la nube
               </p>
             </div>
           </div>
 
-          {/* Quick Stats & Action */}
+          {/* Quick Stats & Logged In User / Logout */}
           <div className="flex items-center gap-3">
             <div className="hidden lg:flex items-center gap-4 text-xs bg-slate-800/80 px-3.5 py-1.5 rounded-lg border border-slate-700/60">
               <div className="flex items-center gap-1.5 text-slate-300">
                 <Users className="w-3.5 h-3.5 text-cyan-400" />
                 <span><strong className="text-white">{health?.activeUsers || 0}</strong> usuarios</span>
               </div>
-              <div className="w-px h-3 bg-slate-700" />
-              <div className="flex items-center gap-1.5 text-slate-300">
-                <Clock className="w-3.5 h-3.5 text-amber-400" />
-                <span>Próxima: <strong className="text-white">08:00 AM</strong></span>
-              </div>
-              <div className="w-px h-3 bg-slate-700" />
-              <div className="flex items-center gap-1.5 text-slate-300">
-                <Activity className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Éxito: <strong className="text-white">{health?.successRateLast24h || 100}%</strong></span>
-              </div>
             </div>
 
-            <button
-              id="btn-quick-run"
-              onClick={onTriggerQuickRun}
-              disabled={isExecuting}
-              className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold text-white shadow-md transition-all ${
-                isExecuting
-                  ? 'bg-amber-600 cursor-not-allowed opacity-90'
-                  : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 active:scale-95 shadow-cyan-600/20'
-              }`}
-            >
-              {isExecuting ? (
-                <>
-                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  <span>Ejecutando...</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Probar Ejecución</span>
-                </>
-              )}
-            </button>
+            {currentUser && (
+              <div className="flex items-center gap-2">
+                <div className="hidden sm:flex items-center gap-2 bg-slate-950/80 px-3 py-1.5 rounded-lg border border-slate-800 text-xs">
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <div className="flex flex-col">
+                    <span className="font-mono font-medium text-slate-200">{currentUser}</span>
+                    <span className="text-[10px] text-slate-400 leading-tight">Coord. Área Clínica</span>
+                  </div>
+                </div>
+
+                {onLogout && (
+                  <button
+                    id="btn-logout-header"
+                    type="button"
+                    onClick={onLogout}
+                    title="Cerrar Sesión Maestra"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-rose-950/70 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-800 transition-colors cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Cerrar Sesión</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -140,55 +133,16 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <button
-            id="tab-logs"
-            onClick={() => setActiveTab('logs')}
+            id="tab-settings"
+            onClick={() => setActiveTab('settings')}
             className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap transition-colors ${
-              activeTab === 'logs'
-                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
+              activeTab === 'settings' || activeTab === 'firebase' || activeTab === 'github-actions' || activeTab === 'architecture'
+                ? 'bg-gradient-to-r from-orange-500/15 via-indigo-500/15 to-cyan-500/15 text-cyan-300 border border-cyan-500/40 font-semibold'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
             }`}
           >
-            <History className="w-3.5 h-3.5" />
-            <span>Historial y Bitácora</span>
-          </button>
-
-          <button
-            id="tab-firebase"
-            onClick={() => setActiveTab('firebase')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap transition-colors ${
-              activeTab === 'firebase'
-                ? 'bg-orange-500/15 text-orange-400 border border-orange-500/30 font-semibold'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-            }`}
-          >
-            <Database className="w-3.5 h-3.5 text-orange-400" />
-            <span>Vinculación Firebase</span>
-          </button>
-
-          <button
-            id="tab-github-actions"
-            onClick={() => setActiveTab('github-actions')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap transition-colors ${
-              activeTab === 'github-actions'
-                ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 font-semibold'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-            }`}
-          >
-            <Github className="w-3.5 h-3.5 text-indigo-400" />
-            <span>GitHub Actions Backend</span>
-          </button>
-
-          <button
-            id="tab-architecture"
-            onClick={() => setActiveTab('architecture')}
-            className={`flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md whitespace-nowrap transition-colors ${
-              activeTab === 'architecture'
-                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/30'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>Arquitectura 3 Componentes & Despliegue</span>
+            <Settings className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Configuración General</span>
           </button>
         </nav>
       </div>

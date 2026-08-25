@@ -634,12 +634,25 @@ export const JobsScheduleView: React.FC<JobsScheduleViewProps> = ({
                         {ALL_DAYS.map((day) => {
                           const timesForDay = weekly ? (weekly[day.id] || []) : (user.activeDays?.includes(day.id) ? user.scheduledTimes : []);
                           if (timesForDay.length === 0) return null;
+                          const isPaused = (user.pausedDays || []).includes(day.id);
+
                           return (
                             <div key={day.id} className="flex items-center justify-between text-xs py-0.5">
-                              <span className="text-slate-400 font-medium w-20">{day.label}:</span>
-                              <div className="flex flex-wrap gap-1 justify-end flex-1">
+                              <span className={`font-medium w-20 flex items-center gap-1 ${isPaused ? 'text-rose-400' : 'text-slate-400'}`}>
+                                <span>{day.label}:</span>
+                                {isPaused && (
+                                  <span className="text-[9px] px-1 py-0.2 rounded bg-rose-950 text-rose-300 border border-rose-800">
+                                    OFF
+                                  </span>
+                                )}
+                              </span>
+                              <div className={`flex flex-wrap gap-1 justify-end flex-1 ${isPaused ? 'opacity-40 grayscale' : ''}`}>
                                 {timesForDay.map((t) => (
-                                  <span key={t} className="px-1.5 py-0.2 rounded bg-slate-900 border border-slate-700 text-cyan-300 font-mono text-[11px]">
+                                  <span key={t} className={`px-1.5 py-0.2 rounded font-mono text-[11px] ${
+                                    isPaused
+                                      ? 'bg-slate-950 border border-slate-800 text-slate-500 line-through'
+                                      : 'bg-slate-900 border border-slate-700 text-cyan-300'
+                                  }`}>
                                     {t}
                                   </span>
                                 ))}

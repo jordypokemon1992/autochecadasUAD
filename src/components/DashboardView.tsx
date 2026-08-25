@@ -40,43 +40,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Banner Notice */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 border border-slate-700/80 rounded-xl p-5 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 text-xs font-semibold bg-cyan-950 text-cyan-300 border border-cyan-800 rounded">
-                Portal Objetivo Configurado
-              </span>
-              <span className="text-xs text-slate-400 flex items-center gap-1">
-                <Globe className="w-3.5 h-3.5 text-slate-400" />
-                https://portal.uad.mx/
-              </span>
-            </div>
-            <h2 className="text-lg font-bold text-white tracking-tight">
-              Automatización de Asistencia & Checado Diario
-            </h2>
-            <p className="text-sm text-slate-300 max-w-3xl">
-              El orquestador ejecutará el script headless en los días y horarios programados. Autentica con las credenciales de cada usuario en la bóveda, localiza el área de <span className="text-cyan-300 font-semibold">Horario</span> e interactúa con el botón de checado únicamente cuando se encuentre habilitado.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              id="btn-run-all-primary"
-              onClick={() => primaryJob && onTriggerRun(primaryJob.id)}
-              disabled={isExecuting}
-              className="px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold text-xs rounded-lg shadow-sm flex items-center gap-2 transition-colors disabled:opacity-50"
-            >
-              <Play className="w-4 h-4 fill-current" />
-              <span>Ejecutar Todos los Usuarios</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4">
         {/* Card 1: Users */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
           <div>
@@ -85,44 +50,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-2xl font-bold text-white">{users.length}</span>
               <span className="text-xs text-emerald-400 font-medium">({activeUsers.length} activos)</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Credenciales encriptadas AES-256</p>
+            <p className="text-[11px] text-slate-400 mt-1">Sincronizados en vivo con Firebase Firestore</p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-blue-950/80 border border-blue-800/60 flex items-center justify-center text-blue-400">
             <Users className="w-5 h-5" />
           </div>
         </div>
 
-        {/* Card 2: Schedule */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <p className="text-xs font-medium text-slate-400">Horario de Disparo</p>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-2xl font-bold text-white">08:00 AM</span>
-              <span className="text-xs text-cyan-400 font-medium">Lun - Vie</span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-1">Jitter de ±3 min configurado</p>
-          </div>
-          <div className="w-10 h-10 rounded-lg bg-cyan-950/80 border border-cyan-800/60 flex items-center justify-center text-cyan-400">
-            <Clock className="w-5 h-5" />
-          </div>
-        </div>
-
-        {/* Card 3: Success Rate */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
-          <div>
-            <p className="text-xs font-medium text-slate-400">Efectividad del Proceso</p>
-            <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-2xl font-bold text-emerald-400">{health?.successRateLast24h || 100}%</span>
-              <span className="text-xs text-slate-400 font-medium">24h</span>
-            </div>
-            <p className="text-[11px] text-slate-400 mt-1">Verificación con reintento (3x)</p>
-          </div>
-          <div className="w-10 h-10 rounded-lg bg-emerald-950/80 border border-emerald-800/60 flex items-center justify-center text-emerald-400">
-            <CheckCircle2 className="w-5 h-5" />
-          </div>
-        </div>
-
-        {/* Card 4: Cloud Runner */}
+        {/* Card 2: Cloud Runner */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex items-center justify-between">
           <div>
             <p className="text-xs font-medium text-slate-400">Orquestador Cloud</p>
@@ -130,7 +65,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-2xl font-bold text-cyan-300">Playwright</span>
               <span className="text-xs text-emerald-400 font-medium">Online</span>
             </div>
-            <p className="text-[11px] text-slate-400 mt-1">Headless Chromium Worker</p>
+            <p className="text-[11px] text-slate-400 mt-1">Headless Chromium Worker desatendido</p>
           </div>
           <div className="w-10 h-10 rounded-lg bg-purple-950/80 border border-purple-800/60 flex items-center justify-center text-purple-400">
             <Server className="w-5 h-5" />
@@ -278,7 +213,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Right Column: Execution Feed & Architecture Quick Glance */}
+        {/* Right Column: Architecture Quick Glance */}
         <div className="space-y-4">
           {/* Architecture Summary Box */}
           <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 rounded-xl p-5">
@@ -287,7 +222,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span>Garantía de Operación 24/7</span>
             </h3>
             <p className="text-xs text-slate-300 mt-2 leading-relaxed">
-              El sistema orquestador opera en segundo plano mediante un demonio cron en contenedor Docker, garantizando ejecución desatendida sin necesidad de mantener abierta esta ventana.
+              El sistema orquestador opera en segundo plano mediante un worker headless automatizado, garantizando ejecución desatendida y sincronizada en la nube con Firebase.
             </p>
 
             <div className="space-y-2 mt-4 text-xs">
@@ -307,44 +242,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
             <button
               onClick={() => onNavigateToTab('architecture')}
-              className="w-full mt-4 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-semibold rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-1.5"
+              className="w-full mt-4 py-2 bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-semibold rounded-lg border border-slate-700 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <span>Ver Diagrama & Scripts de Despliegue</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </button>
-          </div>
-
-          {/* Recent Executions Widget */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="font-semibold text-white text-sm">Últimas Ejecuciones</h3>
-              <button
-                onClick={() => onNavigateToTab('logs')}
-                className="text-xs text-cyan-400 hover:text-cyan-300 font-medium"
-              >
-                Ver Bitácora
-              </button>
-            </div>
-
-            <div className="space-y-3 mt-3">
-              {recentExecutions.slice(0, 4).map((exec) => (
-                <div key={exec.id} className="bg-slate-950/70 p-3 rounded-lg border border-slate-800/80 text-xs">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-medium text-slate-200">{exec.userName}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                      exec.status === 'success' ? 'bg-emerald-950 text-emerald-400' : 'bg-rose-950 text-rose-400'
-                    }`}>
-                      {exec.status.toUpperCase()}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-400 line-clamp-1">{exec.summaryMessage}</p>
-                  <div className="flex items-center justify-between text-[10px] text-slate-400 mt-2 pt-1.5 border-t border-slate-800/50">
-                    <span>{new Date(exec.startedAt).toLocaleTimeString()}</span>
-                    <span>{exec.totalDurationMs} ms</span>
-                  </div>
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>

@@ -294,6 +294,11 @@ function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) {
   const upcomingToday = [];
 
   for (const user of users) {
+    if (user.active === false) continue;
+    if ((user.pausedDays || []).includes(timeContext.dayKey)) {
+      continue;
+    }
+
     const schedule = user.weeklySchedule || {};
     const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
 
@@ -302,9 +307,12 @@ function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) {
       const [th, tm] = timeStr.split(':').map(Number);
       const totalMin = th * 60 + tm;
 
+      const taskKey = `${user.id || user.username}_${timeContext.dayKey}_${timeStr}`;
+
       if (totalMin >= (currentTotalMin - 10) && totalMin <= (windowEndMin + 10)) {
         scheduledInWindow.push({
-          userId: user.id,
+          taskKey,
+          userId: user.id || user.username,
           userName: user.name || user.username,
           username: user.username,
           time: timeStr,
@@ -314,7 +322,8 @@ function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) {
 
       if (totalMin >= (currentTotalMin - 10)) {
         upcomingToday.push({
-          userId: user.id,
+          taskKey,
+          userId: user.id || user.username,
           userName: user.name || user.username,
           username: user.username,
           time: timeStr,
@@ -343,7 +352,7 @@ async function main() {
   const startTime = Date.now();
   const MAX_ACTIVE_WINDOW_MS = 20 * 60 * 1000; // 20 minutos de actividad máxima
   const POLL_INTERVAL_MS = 60 * 1000; // Sondeo cada 60s
-  const processedInSession = new Set();
+  const processedTaskKeys = new Set();
 
   const targetFilter = process.env.TARGET_USER_INPUT || 'all';
   const isManualRun = targetFilter !== 'all';
@@ -363,8 +372,10 @@ async function main() {
   }
 
   // 2. Si no es ejecución manual de prueba, aplicar SMART EARLY-EXIT
+  let scheduledInWindow = [];
   if (!isManualRun) {
     const analysis = analyzeUpcomingSchedule(allUsers, initialTimeContext, 20);
+    scheduledInWindow = analysis.scheduledInWindow;
 
     if (!analysis.hasUpcomingInWindow) {
       console.log("\n=================================================");
@@ -385,7 +396,7 @@ async function main() {
     }
 
     console.log("\n[⚡ PROGRAMACIÓN DETECTADA] Checadas requeridas en esta ventana de 20 min:");
-    analysis.scheduledInWindow.forEach(item => {
+    scheduledInWindow.forEach(item => {
       console.log(`  • ${item.userName} (${item.username}) -> Horario: ${item.time}`);
     });
   }
@@ -401,15 +412,15 @@ async function main() {
         continue;
       }
 
-      const schedule = user.weeklySchedule || {};
-      const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
-
-      const userBlockKey = `${user.id}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`;
-      if (!isManualRun && processedInSession.has(userBlockKey)) {
+      if (!isManualRun && (user.pausedDays || []).includes(timeContext.dayKey)) {
         continue;
       }
 
-      const shouldRunNow = isManualRun || dayTimes.some(t => {
+      const schedule = user.weeklySchedule || {};
+      const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
+
+      // Detectar si algún horario coincide con el margen actual
+      const matchingTimes = dayTimes.filter(t => {
         const [th, tm] = t.split(':').map(Number);
         const [ch, cm] = timeContext.currentTime.split(':').map(Number);
         const targetMin = th * 60 + tm;
@@ -417,16 +428,48 @@ async function main() {
         return Math.abs(currentMin - targetMin) <= 10;
       });
 
+      const unexecutedMatchingTimes = matchingTimes.filter(t => {
+        const key = `${user.id || user.username}_${timeContext.dayKey}_${t}`;
+        return !processedTaskKeys.has(key);
+      });
+
+      const shouldRunNow = isManualRun || unexecutedMatchingTimes.length > 0;
+
       if (shouldRunNow) {
         await executeAttendanceCheck(db, user, timeContext);
-        processedInSession.add(userBlockKey);
+
+        if (matchingTimes.length > 0) {
+          matchingTimes.forEach(t => {
+            const key = `${user.id || user.username}_${timeContext.dayKey}_${t}`;
+            processedTaskKeys.add(key);
+          });
+        } else {
+          const fallbackKey = `${user.id || user.username}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`;
+          processedTaskKeys.add(fallbackKey);
+        }
+
         await new Promise(r => setTimeout(r, 2000));
       } else {
-        console.log(`[EN ESPERA] ${user.name || user.username} (${user.username}) sin horario en este minuto ${timeContext.currentTime} (Horarios: ${dayTimes.join(', ') || 'Ninguno'}).`);
+        console.log(`[EN ESPERA] ${user.name || user.username} (${user.username}) sin horario pendiente en este minuto ${timeContext.currentTime} (Horarios: ${dayTimes.join(', ') || 'Ninguno'}).`);
       }
     }
 
     if (isManualRun) break;
+
+    // ⚡ OPTIMIZACIÓN: EARLY-EXIT POST-EJECUCIÓN
+    const pendingTasks = scheduledInWindow.filter(task => !processedTaskKeys.has(task.taskKey));
+
+    if (pendingTasks.length === 0 && scheduledInWindow.length > 0) {
+      console.log("\n=================================================");
+      console.log("⚡ CIERRE ANTICIPADO EXITOSO (EARLY-EXIT POST-EJECUCIÓN)");
+      console.log("=================================================");
+      console.log(`[✓ COMPLETO] Todas las checadas programadas (${scheduledInWindow.length}/${scheduledInWindow.length}) en esta ventana fueron procesadas con éxito.`);
+      console.log("[✓ OPTIMIZACIÓN MÁXIMA] Finalizando worker de inmediato para liberar el runner y evitar consultas/esperas ociosas.");
+      console.log("=================================================\n");
+      break;
+    } else if (pendingTasks.length > 0) {
+      console.log(`[PENDIENTES] Quedan ${pendingTasks.length} checadas por ejecutar en esta ventana (${pendingTasks.map(p => `${p.userName} @ ${p.time}`).join(', ')}).`);
+    }
 
     const elapsed = Date.now() - startTime;
     if (elapsed + POLL_INTERVAL_MS < MAX_ACTIVE_WINDOW_MS) {

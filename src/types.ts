@@ -13,6 +13,8 @@ export interface UserCredential {
   active: boolean;
   // Horarios independientes por día de la semana
   weeklySchedule?: Partial<Record<DayOfWeek, string[]>>;
+  // Días pausados temporalmente sin perder la lista de horas configuradas
+  pausedDays?: DayOfWeek[];
   // Horarios globales / fallback
   scheduledTimes: string[]; // Múltiples horas diarias, ej: ["08:00", "09:45", "12:45", "13:45", "14:45", "16:45"]
   activeDays?: DayOfWeek[];
