@@ -66,7 +66,9 @@ jobs:
       - name: Instalar Dependencias y Playwright Chromium
         run: |
           npm install firebase dotenv playwright
-          npx playwright install chromium --with-deps
+          # Evita errores 'Hash Sum mismatch' causados por espejos externos inestables en el runner de GitHub
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
+          npx playwright install chromium --with-deps || npx playwright install chromium
 
       - name: Ejecutar Checado Desatendido (Conectado a Firebase)
         env:
