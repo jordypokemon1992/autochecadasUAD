@@ -129,15 +129,27 @@ export async function executeAttendanceCheck(db, user, timeContext) {
     // Descartar comunicado institucional o modales si existen
     const dismissModals = async () => {
       try {
-        const modals = await page.$$("#modal-comunicado, .modal.in, .modal.show, .swal2-container, .sweet-alert, div[role='dialog']");
+        const modals = await page.$$("#modal-convocatoria-posgrado, #modal-expediente-incompleto, #modal-comunicado, .modal.in, .modal.show, .swal2-container, .sweet-alert, div[role='dialog']");
         for (const m of modals) {
           const isVisible = await m.isVisible().catch(() => false);
           if (isVisible) {
-            console.log("[AVISO] Modal o comunicado detectado en pantalla. Descartando...");
-            await page.click("#modal-comunicado .close, #modal-comunicado button, .modal .close, button:has-text('Cerrar'), button:has-text('Entendido'), button:has-text('OK'), button.swal2-confirm").catch(() => {});
+            console.log("[AVISO] Modal o comunicado detectado en pantalla. Descartando con la 'X'...");
+            await page.click("#modal-convocatoria-posgrado button.close, #modal-convocatoria-posgrado [data-dismiss='modal'], #modal-expediente-incompleto button.close, #modal-comunicado .close, #modal-comunicado button, .modal.in button.close, .modal.in [data-dismiss='modal'], .modal.show button.close, .modal button.close, button:has-text('×'), button:has-text('X'), button:has-text('Cerrar'), button:has-text('Entendido'), button:has-text('OK'), button.swal2-confirm").catch(() => {});
             await page.waitForTimeout(1000);
           }
         }
+      } catch (_) {}
+
+      // Fallback robusto para liberar pantalla y backdrops estáticos
+      try {
+        await page.evaluate(() => {
+          if (window.$ && typeof window.$.fn?.modal === 'function') {
+            window.$('.modal, #modal-convocatoria-posgrado, #modal-expediente-incompleto').modal('hide');
+          }
+          document.querySelectorAll('.modal.in button.close, #modal-convocatoria-posgrado button.close, button[data-dismiss="modal"]').forEach(btn => btn.click());
+          document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+          document.body.classList.remove('modal-open');
+        });
       } catch (_) {}
     };
 
@@ -245,10 +257,65 @@ export async function executeAttendanceCheck(db, user, timeContext) {
 
     // 5. Presionar botón verde 'Checar' (#boton_checar)
     console.log(`[5/5] Evaluando botón verde 'Checar' (#boton_checar)...`);
+
+    // INSTRUCCIÓN PREVIA: Cerrar explícitamente cualquier popup emergente dando clic en la "X"
+    console.log(`[POPUP] Verificando y cerrando popups emergentes (#modal-convocatoria-posgrado / modal con 'X')...`);
+    try {
+      const closeSelectors = [
+        "#modal-convocatoria-posgrado button.close",
+        "#modal-convocatoria-posgrado [data-dismiss='modal']",
+        "#modal-convocatoria-posgrado [aria-label='Close']",
+        "#modal-expediente-incompleto button.close",
+        ".modal.in button.close",
+        ".modal.show button.close",
+        ".modal.in [data-dismiss='modal']",
+        ".modal-header button.close",
+        "button.close[data-dismiss='modal']",
+        "button.close:has-text('×')",
+        "button.close:has-text('X')",
+        "[aria-label='Close']",
+        ".modal-dialog .close"
+      ];
+
+      for (const sel of closeSelectors) {
+        const closeBtns = await page.$$(sel);
+        for (const btn of closeBtns) {
+          if (await btn.isVisible().catch(() => false)) {
+            console.log(`[POPUP] Haciendo clic en la 'X' de cierre (${sel})...`);
+            await btn.click().catch(() => {});
+            await page.waitForTimeout(1000);
+          }
+        }
+      }
+
+      // Limpieza forzada de backdrop y modales para evitar que intercepten eventos del puntero
+      await page.evaluate(() => {
+        document.querySelectorAll('.modal.in button.close, #modal-convocatoria-posgrado button.close, button[data-dismiss="modal"]').forEach(b => b.click());
+        if (window.$ && typeof window.$.fn?.modal === 'function') {
+          window.$('.modal, #modal-convocatoria-posgrado, #modal-expediente-incompleto').modal('hide');
+        }
+        document.querySelectorAll('.modal-backdrop').forEach(el => el.remove());
+        const modalEl = document.getElementById('modal-convocatoria-posgrado');
+        if (modalEl) modalEl.style.display = 'none';
+        document.body.classList.remove('modal-open');
+      }).catch(() => {});
+
+      await page.waitForTimeout(600);
+    } catch (popupErr) {
+      console.warn(`[AVISO POPUP] Error menor cerrando popup: ${popupErr.message}`);
+    }
+
+    // Re-evaluar el botón de checar con la vista despejada
+    checkBtn = await page.$(checarSelector);
+
     if (checkBtn) {
       const isVisible = await checkBtn.isVisible();
       if (isVisible) {
-        await checkBtn.click();
+        // Clic en el botón con fallback force: true para máxima resiliencia
+        await checkBtn.click().catch(async () => {
+          console.log("[INFO] Clic regular interceptado; ejecutando clic forzado en #boton_checar...");
+          await checkBtn.click({ force: true });
+        });
         status = 'success';
         message = `Botón verde 'Checar' presionado exitosamente para ${user.name || user.username}.`;
         console.log(`[✓ ÉXITO] ${message}`);
