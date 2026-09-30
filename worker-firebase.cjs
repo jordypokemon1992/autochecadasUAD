@@ -87,12 +87,14 @@ async function fetchActiveUsersFromFirebase(db) {
   }
 }
 
-async function executeAttendanceCheck(db, user, timeContext) {
+async function executeAttendanceCheck(db, user, timeContext, sharedBrowser = null) {
+  const teacherTag = `[${user.name || user.username}]`;
   console.log(`\n==================================================`);
-  console.log(`[EJECUTANDO] Docente: ${user.name || user.username} (${user.username})`);
-  console.log(`[HORARIO] Hora Los Mochis, Sin.: ${timeContext.currentTime} [Día: ${timeContext.dayKey.toUpperCase()}]`);
+  console.log(`${teacherTag} [EJECUTANDO] Docente: ${user.name || user.username} (${user.username})`);
+  console.log(`${teacherTag} [HORARIO] Hora Los Mochis, Sin.: ${timeContext.currentTime} [Día: ${timeContext.dayKey.toUpperCase()}]`);
 
-  const browser = await chromium.launch({
+  const ownBrowser = !sharedBrowser;
+  const browser = sharedBrowser || await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
   });
@@ -108,26 +110,24 @@ async function executeAttendanceCheck(db, user, timeContext) {
   const startTime = Date.now();
 
   page.on('dialog', async dialog => {
-    console.log(`[ALERTA DETECTADA] Tipo: ${dialog.type()}, Mensaje: "${dialog.message()}"`);
+    console.log(`${teacherTag} [ALERTA DETECTADA] Tipo: ${dialog.type()}, Mensaje: "${dialog.message()}"`);
     await dialog.accept().catch(() => {});
   });
 
   try {
     // 1. Acceso a URL
-    console.log(`[1/5] Accediendo a ${TARGET_PORTAL}...`);
+    console.log(`${teacherTag} [1/5] Accediendo a ${TARGET_PORTAL}...`);
     await page.goto(TARGET_PORTAL, { waitUntil: 'domcontentloaded', timeout: 35000 });
-    await page.waitForTimeout(2000);
 
     const dismissModals = async () => {
       try {
-        const modals = await page.$$("#modal-convocatoria-posgrado, #modal-expediente-incompleto, #modal-comunicado, .modal.in, .modal.show, .swal2-container, .sweet-alert, div[role='dialog']");
-        for (const m of modals) {
-          const isVisible = await m.isVisible().catch(() => false);
-          if (isVisible) {
-            console.log("[AVISO] Modal o comunicado detectado. Descartando con la 'X'...");
-            await page.click("#modal-convocatoria-posgrado button.close, #modal-convocatoria-posgrado [data-dismiss='modal'], #modal-expediente-incompleto button.close, #modal-comunicado .close, #modal-comunicado button, .modal.in button.close, .modal.in [data-dismiss='modal'], .modal.show button.close, .modal button.close, button:has-text('×'), button:has-text('X'), button:has-text('Cerrar'), button:has-text('Entendido'), button:has-text('OK'), button.swal2-confirm").catch(() => {});
-            await page.waitForTimeout(1000);
-          }
+        const closeBtn = await page.$(
+          "#modal-convocatoria-posgrado button.close, #modal-convocatoria-posgrado [data-dismiss='modal'], #modal-expediente-incompleto button.close, #modal-comunicado .close, .modal.in button.close, .modal.show button.close, button.close:has-text('×'), button:has-text('Cerrar'), button.swal2-confirm"
+        );
+        if (closeBtn && await closeBtn.isVisible().catch(() => false)) {
+          console.log(`${teacherTag} [AVISO] Modal detectado. Descartando con la 'X'...`);
+          await closeBtn.click().catch(() => {});
+          await page.waitForTimeout(300);
         }
       } catch (_) {}
 
@@ -148,28 +148,26 @@ async function executeAttendanceCheck(db, user, timeContext) {
     // 2. Inyectar credenciales con selectores exactos
     const pwdToUse = user.password || user.passwordEncrypted || "";
     if (pwdToUse.startsWith("enc_aes256_")) {
-      console.warn(`[⚠️ ALERTA CREDENCIAL] La contraseña de ${user.username} contiene un hash previo ("${pwdToUse.slice(0, 16)}..."). Actualiza la contraseña en la Bóveda y resincroniza con Firebase.`);
+      console.warn(`${teacherTag} [⚠️ ALERTA CREDENCIAL] La contraseña contiene un hash previo ("${pwdToUse.slice(0, 16)}..."). Actualiza en la Bóveda.`);
     }
-    console.log(`[2/5] Ingresando matrícula en #user y contraseña en #pass...`);
+    console.log(`${teacherTag} [2/5] Ingresando matrícula y contraseña...`);
     await page.waitForSelector("#user, input[name='_usuario_']", { timeout: 15000 });
     await page.fill("#user, input[name='_usuario_']", user.username);
     await page.fill("#pass, input[name='_pass_']", pwdToUse);
 
     // 3. Enviar login con #boton (icono fa-paw)
-    console.log(`[3/5] Enviando login mediante #boton...`);
+    console.log(`${teacherTag} [3/5] Enviando login mediante #boton...`);
     await Promise.all([
       page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {}),
       page.click("#boton, button[name='boton'], button:has(.fa-paw), #formulario_inicio button[type='submit']")
     ]);
 
-    await page.waitForTimeout(3000);
+    await page.waitForTimeout(1000);
     await dismissModals();
 
-    // Tomar captura post-login para auditoría
     const currentUrl = page.url();
-    console.log(`[ESTADO POST-LOGIN] URL actual: ${currentUrl}`);
+    console.log(`${teacherTag} [ESTADO POST-LOGIN] URL actual: ${currentUrl}`);
 
-    // Comprobar si el login falló (redirección con mensaje de error en URL o alerta en página)
     const isLoginError = currentUrl.includes("m=") || 
                          currentUrl.includes("invalida") || 
                          currentUrl.includes("acceso") ||
@@ -183,26 +181,26 @@ async function executeAttendanceCheck(db, user, timeContext) {
         if (mParam) serverErrorMsg = decodeURIComponent(mParam);
       } catch (_) {}
 
-      console.error(`[ERROR LOGIN] El portal rechazó las credenciales: "${serverErrorMsg}". Matrícula: ${user.username}`);
+      console.error(`${teacherTag} [ERROR LOGIN] Rechazado: "${serverErrorMsg}". Matrícula: ${user.username}`);
       status = 'failed';
       message = `Error de Autenticación: ${serverErrorMsg} (Verifica usuario y contraseña en la Bóveda).`;
       return { status, message, durationMs: Date.now() - startTime };
     }
 
-    console.log(`[✓ LOGIN VÁLIDO] Sesión institucional iniciada correctamente.`);
+    console.log(`${teacherTag} [✓ LOGIN VÁLIDO] Sesión institucional iniciada correctamente.`);
 
     // 4. Localizar botón verde #boton_checar directamente o navegar a Horario
-    console.log(`[4/5] Localizando panel o botón de checado...`);
+    console.log(`${teacherTag} [4/5] Localizando panel o botón de checado...`);
     const checarSelector = "#boton_checar, a#boton_checar, button#boton_checar, a.btn-success:has-text('Checar'), button:has-text('Checar'), .btn-success:has(.fa-hand-pointer-o), a[onclick*='checar'], button[onclick*='checar']";
     
     let checkBtn = await page.$(checarSelector);
 
     if (!checkBtn) {
-      console.log(`[NAVEGACIÓN] Intentando acceder a la pestaña 'Horario'...`);
+      console.log(`${teacherTag} [NAVEGACIÓN] Intentando acceder a la pestaña 'Horario'...`);
       const sidebarToggle = await page.$(".sidebar-toggle, [data-toggle='offcanvas'], [data-toggle='push-menu'], .navbar-toggle, button.navbar-toggler");
       if (sidebarToggle) {
         await sidebarToggle.click().catch(() => {});
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(300);
       }
 
       const horarioSelectors = [
@@ -220,9 +218,9 @@ async function executeAttendanceCheck(db, user, timeContext) {
         try {
           const el = await page.$(sel);
           if (el && await el.isVisible()) {
-            console.log(`[MENÚ] Clic en enlace de Horario (${sel})...`);
+            console.log(`${teacherTag} [MENÚ] Clic en Horario (${sel})...`);
             await el.click();
-            await page.waitForTimeout(2500);
+            await page.waitForTimeout(1500);
             await dismissModals();
             break;
           }
@@ -233,39 +231,19 @@ async function executeAttendanceCheck(db, user, timeContext) {
     }
 
     // 5. Presionar botón verde 'Checar' (#boton_checar)
-    console.log(`[5/5] Evaluando botón verde 'Checar' (#boton_checar)...`);
+    console.log(`${teacherTag} [5/5] Evaluando botón verde 'Checar' (#boton_checar)...`);
 
     // INSTRUCCIÓN PREVIA: Cerrar explícitamente cualquier popup emergente dando clic en la "X"
-    console.log(`[POPUP] Verificando y cerrando popups emergentes (#modal-convocatoria-posgrado / modal con 'X')...`);
     try {
-      const closeSelectors = [
-        "#modal-convocatoria-posgrado button.close",
-        "#modal-convocatoria-posgrado [data-dismiss='modal']",
-        "#modal-convocatoria-posgrado [aria-label='Close']",
-        "#modal-expediente-incompleto button.close",
-        ".modal.in button.close",
-        ".modal.show button.close",
-        ".modal.in [data-dismiss='modal']",
-        ".modal-header button.close",
-        "button.close[data-dismiss='modal']",
-        "button.close:has-text('×')",
-        "button.close:has-text('X')",
-        "[aria-label='Close']",
-        ".modal-dialog .close"
-      ];
-
-      for (const sel of closeSelectors) {
-        const closeBtns = await page.$$(sel);
-        for (const btn of closeBtns) {
-          if (await btn.isVisible().catch(() => false)) {
-            console.log(`[POPUP] Haciendo clic en la 'X' de cierre (${sel})...`);
-            await btn.click().catch(() => {});
-            await page.waitForTimeout(1000);
-          }
-        }
+      const closeBtn = await page.$(
+        "#modal-convocatoria-posgrado button.close, #modal-convocatoria-posgrado [data-dismiss='modal'], #modal-convocatoria-posgrado [aria-label='Close'], #modal-expediente-incompleto button.close, .modal.in button.close, .modal.show button.close, button.close[data-dismiss='modal'], button.close:has-text('×'), button.close:has-text('X'), [aria-label='Close']"
+      );
+      if (closeBtn && await closeBtn.isVisible().catch(() => false)) {
+        console.log(`${teacherTag} [POPUP] Clic en 'X' de cierre detectado...`);
+        await closeBtn.click().catch(() => {});
+        await page.waitForTimeout(300);
       }
 
-      // Limpieza forzada de backdrop y modales para evitar que intercepten eventos del puntero
       await page.evaluate(() => {
         document.querySelectorAll('.modal.in button.close, #modal-convocatoria-posgrado button.close, button[data-dismiss="modal"]').forEach(b => b.click());
         if (window.$ && typeof window.$.fn?.modal === 'function') {
@@ -277,49 +255,49 @@ async function executeAttendanceCheck(db, user, timeContext) {
         document.body.classList.remove('modal-open');
       }).catch(() => {});
 
-      await page.waitForTimeout(600);
-    } catch (popupErr) {
-      console.warn(`[AVISO POPUP] Error menor cerrando popup: ${popupErr.message}`);
-    }
+      await page.waitForTimeout(200);
+    } catch (_) {}
 
-    // Re-evaluar el botón verde 'Checar' con la vista despejada
     checkBtn = await page.$(checarSelector);
 
     if (checkBtn) {
       const isVisible = await checkBtn.isVisible();
       if (isVisible) {
         await checkBtn.click().catch(async () => {
-          console.log("[INFO] Clic regular interceptado; ejecutando clic forzado en #boton_checar...");
+          console.log(`${teacherTag} [INFO] Clic regular interceptado; ejecutando clic forzado en #boton_checar...`);
           await checkBtn.click({ force: true });
         });
         status = 'success';
         message = `Botón verde 'Checar' presionado exitosamente para ${user.name || user.username}.`;
-        console.log(`[✓ ÉXITO] ${message}`);
-        await page.waitForTimeout(2000);
+        console.log(`${teacherTag} [✓ ÉXITO] ${message}`);
+        await page.waitForTimeout(1000);
       } else {
         status = 'success';
         message = `El botón 'Checar' está presente en el horario (Docente: ${user.name || user.username}).`;
-        console.log(`[INFO] ${message}`);
+        console.log(`${teacherTag} [INFO] ${message}`);
       }
     } else {
       const checadoBadge = await page.$(":has-text('[Checado]'), .label-success:has-text('Checado'), span:has-text('Checado'), td:has-text('Checado')");
       if (checadoBadge) {
         status = 'success';
         message = `Asistencia confirmada: Insignia 'Checado' visible en la cuadrícula para ${user.name || user.username}.`;
-        console.log(`[✓ ASISTENCIA CONFIRMADA] ${message}`);
+        console.log(`${teacherTag} [✓ ASISTENCIA CONFIRMADA] ${message}`);
       } else {
         status = 'failed';
         message = `Sesión activa pero no se localizó el botón #boton_checar en la vista actual.`;
-        console.log(`[AVISO] ${message}`);
+        console.log(`${teacherTag} [AVISO] ${message}`);
       }
     }
 
   } catch (error) {
     status = 'failed';
     message = `Error en automatización: ${error.message}`;
-    console.error(`[ERROR] ${message}`);
+    console.error(`${teacherTag} [ERROR] ${message}`);
   } finally {
-    await browser.close();
+    await context.close().catch(() => {});
+    if (ownBrowser) {
+      await browser.close().catch(() => {});
+    }
   }
 
   // Registrar resultado en Firestore
@@ -344,9 +322,9 @@ async function executeAttendanceCheck(db, user, timeContext) {
       lastRunAt: new Date().toISOString(),
       lastStatus: status
     });
-    console.log("[FIREBASE] Bitácora guardada en Firestore exitosamente.");
+    console.log(`${teacherTag} [FIREBASE] Bitácora guardada en Firestore exitosamente.`);
   } catch (fbErr) {
-    console.error("[FIREBASE ERROR] No se pudo guardar bitácora en Firestore:", fbErr.message);
+    console.error(`${teacherTag} [FIREBASE ERROR] No se pudo guardar bitácora en Firestore:`, fbErr.message);
   }
 }
 
@@ -466,87 +444,115 @@ async function main() {
     });
   }
 
-  let cycle = 1;
+  const CONCURRENCY_LIMIT = 3; // Procesa hasta 3 docentes concurrentes en paralelo
+  const sharedBrowser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+  });
 
-  do {
-    const timeContext = getLocalTime();
-    console.log(`\n--- CICLO #${cycle} | Hora actual: ${timeContext.currentTime} [${timeContext.dayKey.toUpperCase()}] ---`);
+  try {
+    let cycle = 1;
 
-    for (const user of allUsers) {
-      if (targetFilter !== 'all' && user.id !== targetFilter && user.username !== targetFilter) {
-        continue;
-      }
+    do {
+      const timeContext = getLocalTime();
+      console.log(`\n--- CICLO #${cycle} | Hora actual: ${timeContext.currentTime} [${timeContext.dayKey.toUpperCase()}] ---`);
 
-      if (!isManualRun && (user.pausedDays || []).includes(timeContext.dayKey)) {
-        continue;
-      }
+      // 1. Filtrar los docentes que deben ejecutar checada en este minuto
+      const usersToRun = [];
 
-      const schedule = user.weeklySchedule || {};
-      const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
-
-      // Detectar si algún horario coincide con el margen actual
-      const matchingTimes = dayTimes.filter(t => {
-        const [th, tm] = t.split(':').map(Number);
-        const [ch, cm] = timeContext.currentTime.split(':').map(Number);
-        const targetMin = th * 60 + tm;
-        const currentMin = ch * 60 + cm;
-        return Math.abs(currentMin - targetMin) <= 10;
-      });
-
-      const unexecutedMatchingTimes = matchingTimes.filter(t => {
-        const key = `${user.id || user.username}_${timeContext.dayKey}_${t}`;
-        return !processedTaskKeys.has(key);
-      });
-
-      const shouldRunNow = isManualRun || unexecutedMatchingTimes.length > 0;
-
-      if (shouldRunNow) {
-        await executeAttendanceCheck(db, user, timeContext);
-
-        if (matchingTimes.length > 0) {
-          matchingTimes.forEach(t => {
-            const key = `${user.id || user.username}_${timeContext.dayKey}_${t}`;
-            processedTaskKeys.add(key);
-          });
-        } else {
-          const fallbackKey = `${user.id || user.username}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`;
-          processedTaskKeys.add(fallbackKey);
+      for (const user of allUsers) {
+        if (targetFilter !== 'all' && user.id !== targetFilter && user.username !== targetFilter) {
+          continue;
         }
 
-        await new Promise(r => setTimeout(r, 2000));
-      } else {
-        console.log(`[EN ESPERA] ${user.name || user.username} (${user.username}) sin horario pendiente en este minuto ${timeContext.currentTime} (Horarios: ${dayTimes.join(', ') || 'Ninguno'}).`);
+        if (!isManualRun && (user.pausedDays || []).includes(timeContext.dayKey)) {
+          continue;
+        }
+
+        const schedule = user.weeklySchedule || {};
+        const dayTimes = schedule[timeContext.dayKey] || user.scheduledTimes || [];
+
+        // Detectar si algún horario coincide con el margen actual
+        const matchingTimes = dayTimes.filter(t => {
+          const [th, tm] = t.split(':').map(Number);
+          const [ch, cm] = timeContext.currentTime.split(':').map(Number);
+          const targetMin = th * 60 + tm;
+          const currentMin = ch * 60 + cm;
+          return Math.abs(currentMin - targetMin) <= 10;
+        });
+
+        const unexecutedMatchingTimes = matchingTimes.filter(t => {
+          const key = `${user.id || user.username}_${timeContext.dayKey}_${t}`;
+          return !processedTaskKeys.has(key);
+        });
+
+        const shouldRunNow = isManualRun || unexecutedMatchingTimes.length > 0;
+
+        if (shouldRunNow) {
+          usersToRun.push({ user, matchingTimes, dayTimes });
+        } else {
+          console.log(`[EN ESPERA] ${user.name || user.username} (${user.username}) sin horario pendiente en este minuto ${timeContext.currentTime} (Horarios: ${dayTimes.join(', ') || 'Ninguno'}).`);
+        }
       }
-    }
 
-    if (isManualRun) break;
+      // 2. Ejecutar checadas en paralelo (lotes de CONCURRENCY_LIMIT)
+      if (usersToRun.length > 0) {
+        console.log(`\n[⚡ EJECUCIÓN PARALELA] Procesando ${usersToRun.length} docente(s) en lotes de hasta ${CONCURRENCY_LIMIT} simultáneos...`);
 
-    // ⚡ OPTIMIZACIÓN: EARLY-EXIT POST-EJECUCIÓN
-    const pendingTasks = scheduledInWindow.filter(task => !processedTaskKeys.has(task.taskKey));
+        for (let i = 0; i < usersToRun.length; i += CONCURRENCY_LIMIT) {
+          const batch = usersToRun.slice(i, i + CONCURRENCY_LIMIT);
+          console.log(`\n--- [LOTE ${Math.floor(i / CONCURRENCY_LIMIT) + 1}] Iniciando ${batch.length} checada(s) simultánea(s) (${batch.map(b => b.user.name || b.user.username).join(', ')}) ---`);
 
-    if (pendingTasks.length === 0 && scheduledInWindow.length > 0) {
-      console.log("\n=================================================");
-      console.log("⚡ CIERRE ANTICIPADO EXITOSO (EARLY-EXIT POST-EJECUCIÓN)");
-      console.log("=================================================");
-      console.log(`[✓ COMPLETO] Todas las checadas programadas (${scheduledInWindow.length}/${scheduledInWindow.length}) en esta ventana fueron procesadas con éxito.`);
-      console.log("[✓ OPTIMIZACIÓN MÁXIMA] Finalizando worker de inmediato para liberar el runner y evitar consultas/esperas ociosas.");
-      console.log("=================================================\n");
-      break;
-    } else if (pendingTasks.length > 0) {
-      console.log(`[PENDIENTES] Quedan ${pendingTasks.length} checadas por ejecutar en esta ventana (${pendingTasks.map(p => `${p.userName} @ ${p.time}`).join(', ')}).`);
-    }
+          await Promise.all(batch.map(async ({ user, matchingTimes }) => {
+            try {
+              await executeAttendanceCheck(db, user, timeContext, sharedBrowser);
 
-    const elapsed = Date.now() - startTime;
-    if (elapsed + POLL_INTERVAL_MS < MAX_ACTIVE_WINDOW_MS) {
-      const remainingSecs = Math.round((MAX_ACTIVE_WINDOW_MS - elapsed) / 1000);
-      console.log(`[VENTANA ACTIVA] Esperando 60s antes del siguiente ciclo... (Restante: ${remainingSecs}s)`);
-      await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-      cycle++;
-    } else {
-      break;
-    }
+              if (matchingTimes.length > 0) {
+                matchingTimes.forEach(t => {
+                  processedTaskKeys.add(`${user.id || user.username}_${timeContext.dayKey}_${t}`);
+                });
+              } else {
+                processedTaskKeys.add(`${user.id || user.username}_${timeContext.dayKey}_${timeContext.currentTime.slice(0, 2)}`);
+              }
+            } catch (err) {
+              console.error(`[ERROR LOTE] Falló checada para ${user.name || user.username}:`, err.message);
+            }
+          }));
+        }
+      }
 
-  } while (Date.now() - startTime < MAX_ACTIVE_WINDOW_MS);
+      if (isManualRun) break;
+
+      // ⚡ OPTIMIZACIÓN: EARLY-EXIT POST-EJECUCIÓN
+      const pendingTasks = scheduledInWindow.filter(task => !processedTaskKeys.has(task.taskKey));
+
+      if (pendingTasks.length === 0 && scheduledInWindow.length > 0) {
+        console.log("\n=================================================");
+        console.log("⚡ CIERRE ANTICIPADO EXITOSO (EARLY-EXIT POST-EJECUCIÓN)");
+        console.log("=================================================");
+        console.log(`[✓ COMPLETO] Todas las checadas programadas (${scheduledInWindow.length}/${scheduledInWindow.length}) en esta ventana fueron procesadas con éxito.`);
+        console.log("[✓ OPTIMIZACIÓN MÁXIMA] Finalizando worker de inmediato para liberar el runner y evitar consultas/esperas ociosas.");
+        console.log("=================================================\n");
+        break;
+      } else if (pendingTasks.length > 0) {
+        console.log(`[PENDIENTES] Quedan ${pendingTasks.length} checadas por ejecutar en esta ventana (${pendingTasks.map(p => `${p.userName} @ ${p.time}`).join(', ')}).`);
+      }
+
+      const elapsed = Date.now() - startTime;
+      if (elapsed + POLL_INTERVAL_MS < MAX_ACTIVE_WINDOW_MS) {
+        const remainingSecs = Math.round((MAX_ACTIVE_WINDOW_MS - elapsed) / 1000);
+        console.log(`[VENTANA ACTIVA] Esperando 60s antes del siguiente ciclo... (Restante: ${remainingSecs}s)`);
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+        cycle++;
+      } else {
+        break;
+      }
+
+    } while (Date.now() - startTime < MAX_ACTIVE_WINDOW_MS);
+
+  } finally {
+    await sharedBrowser.close().catch(() => {});
+  }
 
   console.log("\n=================================================");
   console.log(`  VENTANA DE ACTIVIDAD FINALIZADA CON ÉXITO`);
