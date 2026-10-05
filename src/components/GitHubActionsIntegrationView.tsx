@@ -199,9 +199,23 @@ export async function executeAttendanceCheck(db, user, timeContext, sharedBrowse
   });
 
   try {
-    // 1. Acceso a URL del portal
+    // 1. Acceso a URL del portal con reintento automático ante fallas de red/DNS
     console.log(\`\${teacherTag} [1/5] Accediendo a \${TARGET_PORTAL}...\`);
-    await page.goto(TARGET_PORTAL, { waitUntil: 'domcontentloaded', timeout: 35000 });
+    let gotoOk = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await page.goto(TARGET_PORTAL, { waitUntil: 'domcontentloaded', timeout: 35000 });
+        gotoOk = true;
+        break;
+      } catch (gotoErr) {
+        console.warn(\`\${teacherTag} [AVISO RED/DNS] Intento \${attempt}/3 falló al acceder al portal (\${gotoErr.message}). Reintentando en 3s...\`);
+        if (attempt < 3) {
+          await page.waitForTimeout(3000);
+        } else {
+          throw gotoErr;
+        }
+      }
+    }
 
     const dismissModals = async () => {
       try {
@@ -382,6 +396,8 @@ export async function executeAttendanceCheck(db, user, timeContext, sharedBrowse
   } catch (fbErr) {
     console.error("[FIREBASE ERROR] No se pudo guardar bitácora en Firestore:", fbErr.message);
   }
+
+  return { status, message, durationMs };
 }
 
 export function analyzeUpcomingSchedule(users, timeContext, windowMinutes = 20) {
@@ -560,16 +576,23 @@ export async function main() {
           const batch = usersToRun.slice(i, i + CONCURRENCY_LIMIT);
           console.log(\`\\n--- [LOTE \${Math.floor(i / CONCURRENCY_LIMIT) + 1}] Iniciando \${batch.length} checada(s) simultánea(s) (\${batch.map(b => b.user.name || b.user.username).join(', ')}) ---\`);
 
-          await Promise.all(batch.map(async ({ user, matchingTimes }) => {
-            try {
-              await executeAttendanceCheck(db, user, timeContext, sharedBrowser);
+          await Promise.all(batch.map(async ({ user, matchingTimes }, idx) => {
+            // Escalonar ligeramente (600ms) para evitar colisiones DNS simultáneas
+            if (idx > 0) await new Promise(r => setTimeout(r, idx * 600));
 
-              if (matchingTimes.length > 0) {
-                matchingTimes.forEach(t => {
-                  processedTaskKeys.add(\`\${user.id || user.username}_\${timeContext.dayKey}_\${t}\`);
-                });
+            try {
+              const result = await executeAttendanceCheck(db, user, timeContext, sharedBrowser);
+
+              if (result && result.status === 'success') {
+                if (matchingTimes.length > 0) {
+                  matchingTimes.forEach(t => {
+                    processedTaskKeys.add(\`\${user.id || user.username}_\${timeContext.dayKey}_\${t}\`);
+                  });
+                } else {
+                  processedTaskKeys.add(\`\${user.id || user.username}_\${timeContext.dayKey}_\${timeContext.currentTime.slice(0, 2)}\`);
+                }
               } else {
-                processedTaskKeys.add(\`\${user.id || user.username}_\${timeContext.dayKey}_\${timeContext.currentTime.slice(0, 2)}\`);
+                console.warn(\`[REINTENTO PROGRAMADO] La checada de \${user.name || user.username} no fue exitosa en este ciclo. Permanecerá pendiente para reintentarse en los siguientes minutos de la ventana.\`);
               }
             } catch (err) {
               console.error(\`[ERROR LOTE] Falló checada para \${user.name || user.username}: \${err.message}\`);
