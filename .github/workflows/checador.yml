@@ -16,7 +16,7 @@ concurrency:
 jobs:
   execute-attendance:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
 
     steps:
       - name: Checkout del Repositorio
@@ -27,12 +27,22 @@ jobs:
         with:
           node-version: 24
 
-      - name: Instalar Dependencias y Playwright Chromium
+      - name: Caché de Navegadores Playwright
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-v1
+
+      - name: Instalar Dependencias del Worker
         run: |
-          npm install firebase dotenv playwright
-          # Evita errores 'Hash Sum mismatch' causados por espejos externos inestables en el runner de GitHub
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
-          npx playwright install chromium --with-deps || npx playwright install chromium
+          npm install --no-audit --no-fund --prefer-offline firebase dotenv playwright
+
+      - name: Instalar Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          # Descarga directa de Chromium sin depender de repositorios ni apt-get de Ubuntu
+          npx playwright install chromium
 
       - name: Ejecutar Checado Desatendido (Conectado a Firebase)
         env:
