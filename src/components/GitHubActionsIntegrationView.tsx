@@ -51,7 +51,7 @@ concurrency:
 
 jobs:
   execute-attendance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
