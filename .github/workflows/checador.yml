@@ -36,7 +36,7 @@ jobs:
 
       - name: Instalar Dependencias del Worker
         run: |
-          npm install --no-audit --no-fund --prefer-offline firebase dotenv playwright
+          npm install --no-audit --no-fund firebase dotenv playwright
 
       - name: Instalar Playwright Chromium
         if: steps.playwright-cache.outputs.cache-hit != 'true'
