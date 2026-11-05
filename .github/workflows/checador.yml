@@ -32,11 +32,11 @@ jobs:
         id: playwright-cache
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-chromium-v1
+          key: ${{ runner.os }}-playwright-chromium-1.50.1
 
       - name: Instalar Dependencias del Worker
         run: |
-          npm install --no-audit --no-fund firebase dotenv playwright
+          npm install --no-audit --no-fund firebase dotenv playwright@1.50.1
 
       - name: Instalar Playwright Chromium
         if: steps.playwright-cache.outputs.cache-hit != 'true'
